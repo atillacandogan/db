@@ -1,0 +1,121 @@
+{
+  "realm": "dbscanner",
+  "displayName": "DBScanner",
+  "enabled": true,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "roles": {
+    "realm": [
+      {
+        "name": "dbscanner-viewer",
+        "description": "Can view targets, scans, findings, rules and NSE scripts"
+      },
+      {
+        "name": "dbscanner-operator",
+        "description": "Can create and update targets and start or cancel scans",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "dbscanner-viewer"
+          ]
+        }
+      },
+      {
+        "name": "dbscanner-admin",
+        "description": "Can administer the DBScanner catalog and delete resources",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "dbscanner-operator"
+          ]
+        }
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "dbscanner-api",
+      "name": "DBScanner API",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    },
+    {
+      "clientId": "dbscanner-web",
+      "name": "DBScanner Web",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "rootUrl": "http://localhost:3000",
+      "baseUrl": "http://localhost:3000",
+      "redirectUris": [
+        "http://localhost:3000/*",
+        "http://127.0.0.1:3000/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "roles",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "dbscanner api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "dbscanner-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "dbscanner-admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "DBScanner",
+      "lastName": "Administrator",
+      "email": "admin@dbscanner.local",
+      "realmRoles": [
+        "dbscanner-admin"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "ChangeMe_DbScanner_2026!",
+          "temporary": true
+        }
+      ]
+    }
+  ]
+}

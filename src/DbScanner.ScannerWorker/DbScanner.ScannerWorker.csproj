@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-DbScanner.ScannerWorker-6062f419-0216-453a-a8a6-9abae8eee698</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DbScanner.Application\DbScanner.Application.csproj" />
+    <ProjectReference Include="..\DbScanner.Infrastructure\DbScanner.Infrastructure.csproj" />
+    <ProjectReference Include="..\DbScanner.Contracts\DbScanner.Contracts.csproj" />
+  </ItemGroup>
+</Project>
