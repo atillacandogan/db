@@ -14,6 +14,7 @@ public static class DependencyInjection
         services.AddScoped<IScanProcessingService, ScanProcessingService>();
         services.AddScoped<ITargetService, TargetService>();
         services.AddScoped<IDiscoveryService, DiscoveryService>();
+        services.AddScoped<IDiscoveryAllowlistService, DiscoveryAllowlistService>();
         services.AddScoped<IRuleCatalogService, RuleCatalogService>();
         services.AddScoped<INseScriptCatalogService, NseScriptCatalogService>();
         services.AddScoped<IFindingCatalogService, FindingCatalogService>();

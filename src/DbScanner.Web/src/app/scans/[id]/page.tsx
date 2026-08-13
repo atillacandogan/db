@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ScanStatusBadge } from "@/components/feedback/scan-status-badge";
+import { OperationToast } from "@/components/feedback/operation-toast";
+import { ExportMenu } from "@/components/ui/export-menu";
 import { getScan } from "@/lib/api/scans";
+import { exportScanAsJson, exportScanAsPdf, exportScanAsXlsx } from "@/lib/utils/report-exports";
 import { resolveRiskLevel, type RiskLevel } from "@/lib/utils/risk";
 import { getScriptResultStatus } from "@/lib/utils/script-result";
 import { getSeverityLabel } from "@/lib/utils/severity";
@@ -15,7 +18,9 @@ const severityFilters = ["info", "low", "medium", "high", "critical"] as const;
 
 export default function ScanDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const severity = useSearchParams().get("severity") ?? undefined;
+  const searchParams = useSearchParams();
+  const severity = searchParams.get("severity") ?? undefined;
+  const [exportError, setExportError] = useState<string | null>(null);
   const scanQuery = useQuery({
     queryKey: ["scans", id],
     queryFn: () => getScan(id),
@@ -56,8 +61,23 @@ export default function ScanDetailPage() {
       : scan.findings.filter((finding) => finding.severity === selectedSeverity);
   const duration = formatDuration(scan.startedAt, scan.finishedAt);
 
+  async function exportPdf() {
+    if (!scan) {
+      return;
+    }
+
+    setExportError(null);
+    try {
+      await exportScanAsPdf(scan);
+    } catch (error) {
+      console.error("Scan PDF export failed.", error);
+      setExportError("PDF hazırlanamadı. Lütfen tekrar deneyin.");
+    }
+  }
+
   return (
-    <section className="page-stack page-stack--wide scan-report-page">
+    <>
+      <section className="page-stack page-stack--wide scan-report-page">
       <div className="report-hero">
         <div>
           <p className="eyebrow">Scans</p>
@@ -66,6 +86,15 @@ export default function ScanDetailPage() {
         <div className="report-hero__meta">
           <ScanStatusBadge status={scan.status} />
           {riskLevel ? <span className={`risk-badge risk-badge--${riskLevel}`}>Overall Risk: {formatRiskLevel(riskLevel)}</span> : null}
+          <span className="no-print">
+            <ExportMenu
+              options={[
+                { label: "PDF", description: "Gerçek PDF dosyası olarak indir", onSelect: () => void exportPdf() },
+                { label: "Excel (.xlsx)", description: "Özet, findings ve script sonuçları", onSelect: () => exportScanAsXlsx(scan) },
+                { label: "JSON", description: "Scan raporunun ham veri çıktısı", onSelect: () => exportScanAsJson(scan) },
+              ]}
+            />
+          </span>
         </div>
       </div>
 
@@ -155,7 +184,12 @@ export default function ScanDetailPage() {
           <p className="muted">Secili filtre icin finding yok.</p>
         )}
       </section>
-    </section>
+      </section>
+
+      {exportError ? (
+        <OperationToast message={exportError} variant="error" onClose={() => setExportError(null)} />
+      ) : null}
+    </>
   );
 }
 

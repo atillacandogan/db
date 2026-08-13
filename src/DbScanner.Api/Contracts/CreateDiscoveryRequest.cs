@@ -2,6 +2,7 @@ namespace DbScanner.Api.Contracts;
 
 public sealed record CreateDiscoveryRequest(
     string Name,
-    string Scope,
+    string? Scope,
     string Environment,
-    IReadOnlyList<string>? SupportedEngineFilter = null);
+    IReadOnlyList<string>? SupportedEngineFilter = null,
+    bool? UseAuthorizedScope = null);

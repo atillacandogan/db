@@ -28,7 +28,12 @@ public sealed class ScanService(
             throw new InvalidOperationException("Target is disabled.");
         }
 
-        var isInScope = await scanScopeRepository.IsAllowedAsync(target.Host, target.Port, cancellationToken);
+        var isInScope = await scanScopeRepository.IsAllowedAsync(
+            target.Host,
+            target.Port,
+            target.EnvironmentTag ?? string.Empty,
+            target.Engine,
+            cancellationToken);
         if (!isInScope)
         {
             throw new InvalidOperationException("Target is outside the approved scan scope.");

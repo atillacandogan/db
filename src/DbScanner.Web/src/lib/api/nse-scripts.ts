@@ -26,6 +26,8 @@ export type NseScriptSyncResult = {
   addedCount: number;
   updatedCount: number;
   unchangedCount: number;
+  skippedCount: number;
+  failedCount: number;
   uninstalledCount: number;
 };
 

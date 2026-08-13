@@ -4,15 +4,20 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ScanStatusBadge } from "@/components/feedback/scan-status-badge";
+import { OperationToast } from "@/components/feedback/operation-toast";
 import { Button } from "@/components/ui/button";
-import { getFindings } from "@/lib/api/findings";
+import { ExportMenu } from "@/components/ui/export-menu";
+import { getFindings, getFindingsForExport } from "@/lib/api/findings";
 import { queryKeys } from "@/lib/query/query-keys";
 import { resolveRiskLevel, type RiskLevel } from "@/lib/utils/risk";
+import { exportFindingsAsCsv, exportFindingsAsXlsx } from "@/lib/utils/report-exports";
 import { getSeverityLabel } from "@/lib/utils/severity";
 import type { FindingListItemDto } from "@/schemas/finding.schema";
 
 export function FindingsClient() {
   const [selectedFinding, setSelectedFinding] = useState<FindingListItemDto | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const findingsQuery = useQuery({
     queryKey: queryKeys.findings,
     queryFn: getFindings,
@@ -41,6 +46,29 @@ export function FindingsClient() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedFinding]);
 
+  async function exportAllFindings(format: "xlsx" | "csv") {
+    if (isExporting) {
+      return;
+    }
+
+    setIsExporting(true);
+    setExportError(null);
+
+    try {
+      const allFindings = await getFindingsForExport();
+      if (format === "xlsx") {
+        exportFindingsAsXlsx(allFindings);
+      } else {
+        exportFindingsAsCsv(allFindings);
+      }
+    } catch (error) {
+      console.error("Findings export failed.", error);
+      setExportError("Findings dışa aktarılamadı. Lütfen tekrar deneyin.");
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
   return (
     <>
       <section className="placeholder admin-grid-panel">
@@ -49,7 +77,18 @@ export function FindingsClient() {
             <p className="detail-label">Latest Findings</p>
             <p className="muted">Son 50 bulgu; detayli kanit ve remediation modal icinde sunulur.</p>
           </div>
-          <span className="targets-count">{findings.length} finding</span>
+          <div className="admin-grid-panel__actions">
+            <span className="targets-count">{findings.length} finding</span>
+            {findings.length > 0 ? (
+              <ExportMenu
+                label={isExporting ? "Hazırlanıyor..." : undefined}
+                options={[
+                  { label: "Excel (.xlsx)", description: "Tüm bulguların detaylı çıktısı", onSelect: () => void exportAllFindings("xlsx") },
+                  { label: "CSV", description: "Tüm bulguların tablo çıktısı", onSelect: () => void exportAllFindings("csv") },
+                ]}
+              />
+            ) : null}
+          </div>
         </div>
 
         {findingsQuery.isLoading ? <div className="admin-grid-state muted">Loading findings...</div> : null}
@@ -145,6 +184,10 @@ export function FindingsClient() {
 
       {selectedFinding ? (
         <FindingDetailsModal finding={selectedFinding} onClose={() => setSelectedFinding(null)} />
+      ) : null}
+
+      {exportError ? (
+        <OperationToast message={exportError} variant="error" onClose={() => setExportError(null)} />
       ) : null}
     </>
   );

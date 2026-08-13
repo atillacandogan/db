@@ -1,15 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { ExportMenu } from "@/components/ui/export-menu";
+import { OperationToast } from "@/components/feedback/operation-toast";
 import { ScanStatusBadge } from "@/components/feedback/scan-status-badge";
 import { ScanQuickViewModal } from "@/components/scans/scan-quick-view-modal";
-import { cancelScan, deleteScan, getScans } from "@/lib/api/scans";
+import { cancelScan, deleteScan, getScan, getScans } from "@/lib/api/scans";
 import { queryKeys } from "@/lib/query/query-keys";
 import { resolveRiskLevel, type RiskLevel } from "@/lib/utils/risk";
+import { exportScanAsJson, exportScanAsPdf, exportScanAsXlsx } from "@/lib/utils/report-exports";
 
 export function ScanHistoryClient() {
+  const router = useRouter();
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -27,19 +32,6 @@ export function ScanHistoryClient() {
       ),
     [scansQuery.data],
   );
-
-  useEffect(() => {
-    if (!feedback && !error) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setFeedback(null);
-      setError(null);
-    }, 5000);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [error, feedback]);
 
   const cancelScanMutation = useMutation({
     mutationFn: cancelScan,
@@ -66,6 +58,29 @@ export function ScanHistoryClient() {
       setFeedback(null);
     },
   });
+
+  async function exportScan(scanId: string, format: "pdf" | "xlsx" | "json") {
+    setError(null);
+
+    try {
+      const scan = await queryClient.fetchQuery({
+        queryKey: queryKeys.scan(scanId),
+        queryFn: () => getScan(scanId),
+      });
+
+      if (format === "pdf") {
+        await exportScanAsPdf(scan);
+      } else if (format === "xlsx") {
+        exportScanAsXlsx(scan);
+      } else {
+        exportScanAsJson(scan);
+      }
+    } catch (exportError) {
+      console.error("Scan export failed.", exportError);
+      setError("Scan dışa aktarılamadı. Lütfen tekrar deneyin.");
+      setFeedback(null);
+    }
+  }
 
   return (
     <>
@@ -112,7 +127,19 @@ export function ScanHistoryClient() {
               const riskLevel = resolveRiskLevel(scan.riskScore, scan.overallSeverity);
 
               return (
-                <article key={scan.id} className="admin-table__row scans-table-grid">
+                <article
+                  key={scan.id}
+                  className="admin-table__row scans-table-grid scan-history-row"
+                  role="link"
+                  tabIndex={0}
+                  aria-label={`${scan.target?.name ?? scan.targetId} scan raporuna git`}
+                  onClick={() => router.push(`/scans/${scan.id}`)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && event.target === event.currentTarget) {
+                      router.push(`/scans/${scan.id}`);
+                    }
+                  }}
+                >
                   <div className="admin-table__cell admin-table__cell--primary" data-label="Target">
                     <strong>{scan.target?.name ?? scan.targetId}</strong>
                     <span className="muted admin-table__secondary">{scan.id}</span>
@@ -157,7 +184,12 @@ export function ScanHistoryClient() {
                     )}
                   </div>
 
-                  <div className="admin-table__cell admin-table__actions" data-label="Actions">
+                  <div
+                    className="admin-table__cell admin-table__actions"
+                    data-label="Actions"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
                     <Button
                       className="button button--secondary button--compact"
                       type="button"
@@ -165,6 +197,13 @@ export function ScanHistoryClient() {
                     >
                       Detaylar
                     </Button>
+                    <ExportMenu
+                      options={[
+                        { label: "PDF", description: "İndirilebilir tam scan raporu", onSelect: () => void exportScan(scan.id, "pdf") },
+                        { label: "Excel (.xlsx)", description: "Özet, findings ve script sonuçları", onSelect: () => void exportScan(scan.id, "xlsx") },
+                        { label: "JSON", description: "Scan raporunun ham veri çıktısı", onSelect: () => void exportScan(scan.id, "json") },
+                      ]}
+                    />
                     {scan.status === "scanning" ? (
                       <Button
                         className="button button--secondary button--compact"
@@ -204,24 +243,14 @@ export function ScanHistoryClient() {
       ) : null}
 
       {feedback || error ? (
-        <div
-          className={`operation-toast ${error ? "operation-toast--error" : "operation-toast--success"}`}
-          role={error ? "alert" : "status"}
-          aria-live={error ? "assertive" : "polite"}
-        >
-          <span>{error ?? feedback}</span>
-          <button
-            className="operation-toast__close"
-            type="button"
-            aria-label="Bildirimi kapat"
-            onClick={() => {
-              setFeedback(null);
-              setError(null);
-            }}
-          >
-            x
-          </button>
-        </div>
+        <OperationToast
+          message={error ?? feedback ?? ""}
+          variant={error ? "error" : "success"}
+          onClose={() => {
+            setFeedback(null);
+            setError(null);
+          }}
+        />
       ) : null}
     </>
   );

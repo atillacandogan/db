@@ -1,6 +1,8 @@
 using System.Net;
+using System.Net.Sockets;
 using DbScanner.Domain.Entities;
 using DbScanner.Domain.Enums;
+using DbScanner.Domain.Services;
 
 namespace DbScanner.Infrastructure.Discovery;
 
@@ -9,26 +11,55 @@ internal static class NetworkScope
     public static bool IsHostAllowed(
         string host,
         int port,
-        IEnumerable<ScanScopeAllowlist> allowlist)
+        DatabaseEngine engine,
+        IEnumerable<ScanScopeAllowlist> allowlist) =>
+        allowlist.Any(scope => scope.Enabled
+            && EntryAllowsEnginePort(scope, engine, port)
+            && EntryContainsHost(scope, host));
+
+    public static bool EntryAllowsEnginePort(
+        ScanScopeAllowlist entry,
+        DatabaseEngine engine,
+        int port)
+    {
+        if (!DiscoveryAllowlistPolicy.ParseEngines(entry.AllowedEngines).Contains(engine))
+        {
+            return false;
+        }
+
+        var ports = DiscoveryAllowlistPolicy.ParsePorts(entry);
+        return ports.TryGetValue(engine, out var allowedPorts)
+            ? allowedPorts.Contains(port)
+            : entry.Port is null || entry.Port == port;
+    }
+
+    public static IReadOnlyList<int> GetPorts(ScanScopeAllowlist entry, DatabaseEngine engine)
+    {
+        var ports = DiscoveryAllowlistPolicy.ParsePorts(entry);
+        if (ports.TryGetValue(engine, out var configured))
+        {
+            return configured;
+        }
+
+        return entry.Port is { } legacyPort
+            ? [legacyPort]
+            : [DiscoveryAllowlistPolicy.StandardPorts[engine]];
+    }
+
+    public static bool EntryContainsHost(ScanScopeAllowlist entry, string host)
     {
         if (!IPAddress.TryParse(host, out var address))
         {
-            return allowlist.Any(scope =>
-                scope.Enabled
-                && PortMatches(scope, port)
-                && scope.ScopeType is ScanScopeType.Hostname or ScanScopeType.DemoTarget
-                && scope.ScopeValue.Equals(host, StringComparison.OrdinalIgnoreCase));
+            return entry.ScopeType is ScanScopeType.Hostname or ScanScopeType.DemoTarget
+                && entry.ScopeValue.Equals(host.Trim().TrimEnd('.'), StringComparison.OrdinalIgnoreCase);
         }
 
-        return allowlist.Any(scope =>
-            scope.Enabled
-            && PortMatches(scope, port)
-            && (scope.ScopeType == ScanScopeType.IpAddress
-                    && IPAddress.TryParse(scope.ScopeValue, out var allowedAddress)
-                    && allowedAddress.Equals(address)
-                || scope.ScopeType == ScanScopeType.Cidr
-                    && TryParseIpv4Cidr(scope.ScopeValue, out var network, out var prefix)
-                    && Contains(network, prefix, address)));
+        return entry.ScopeType == ScanScopeType.IpAddress
+                && IPAddress.TryParse(entry.ScopeValue, out var allowedAddress)
+                && allowedAddress.Equals(address)
+            || entry.ScopeType == ScanScopeType.Cidr
+                && TryParseIpv4Cidr(entry.ScopeValue, out var network, out var prefix)
+                && Contains(network, prefix, address);
     }
 
     public static bool TryParseIpv4Cidr(string value, out IPAddress network, out int prefixLength)
@@ -38,7 +69,7 @@ internal static class NetworkScope
         var parts = value.Split('/', StringSplitOptions.TrimEntries);
         if (parts.Length != 2
             || !IPAddress.TryParse(parts[0], out var address)
-            || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork
+            || address.AddressFamily != AddressFamily.InterNetwork
             || !int.TryParse(parts[1], out prefixLength)
             || prefixLength is < 0 or > 32)
         {
@@ -52,8 +83,8 @@ internal static class NetworkScope
 
     public static bool Contains(IPAddress network, int prefixLength, IPAddress address)
     {
-        if (network.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork
-            || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+        if (network.AddressFamily != AddressFamily.InterNetwork
+            || address.AddressFamily != AddressFamily.InterNetwork)
         {
             return false;
         }
@@ -69,9 +100,14 @@ internal static class NetworkScope
         int innerPrefix) =>
         innerPrefix >= outerPrefix && Contains(outerNetwork, outerPrefix, innerNetwork);
 
-    public static IReadOnlyList<string> ExpandIpv4(IPAddress network, int prefixLength, int maxHosts)
+    public static long GetIpv4AddressCount(int prefixLength) => 1L << (32 - prefixLength);
+
+    public static IReadOnlyList<string> ExpandIpv4(
+        IPAddress network,
+        int prefixLength,
+        int maxHosts)
     {
-        var addressCount = 1L << (32 - prefixLength);
+        var addressCount = GetIpv4AddressCount(prefixLength);
         if (addressCount > maxHosts)
         {
             throw new InvalidOperationException($"Discovery CIDR cannot contain more than {maxHosts} addresses.");
@@ -90,23 +126,48 @@ internal static class NetworkScope
         return addresses;
     }
 
-    public static bool IsPrivateOrLocal(IPAddress address)
+    public static bool IsPrivateUnicast(IPAddress address)
     {
-        if (IPAddress.IsLoopback(address))
+        if (address.AddressFamily != AddressFamily.InterNetwork
+            || IPAddress.IsLoopback(address)
+            || IsLinkLocal(address)
+            || IsMulticast(address)
+            || address.Equals(IPAddress.Any)
+            || address.Equals(IPAddress.Broadcast))
         {
-            return true;
+            return false;
         }
 
         var bytes = address.GetAddressBytes();
         return bytes[0] == 10
-            || bytes[0] == 127
             || bytes[0] == 192 && bytes[1] == 168
-            || bytes[0] == 172 && bytes[1] is >= 16 and <= 31
-            || bytes[0] == 169 && bytes[1] == 254;
+            || bytes[0] == 172 && bytes[1] is >= 16 and <= 31;
     }
 
-    private static bool PortMatches(ScanScopeAllowlist scope, int port) =>
-        scope.Port is null || scope.Port == port;
+    public static bool IsPrivateNetwork(IPAddress network)
+    {
+        if (network.AddressFamily != AddressFamily.InterNetwork)
+        {
+            return false;
+        }
+
+        var bytes = network.GetAddressBytes();
+        return bytes[0] == 10
+            || bytes[0] == 192 && bytes[1] == 168
+            || bytes[0] == 172 && bytes[1] is >= 16 and <= 31;
+    }
+
+    public static bool IsLinkLocal(IPAddress address)
+    {
+        var bytes = address.GetAddressBytes();
+        return bytes.Length == 4 && bytes[0] == 169 && bytes[1] == 254;
+    }
+
+    public static bool IsMulticast(IPAddress address)
+    {
+        var bytes = address.GetAddressBytes();
+        return bytes.Length == 4 && bytes[0] is >= 224 and <= 239;
+    }
 
     private static uint PrefixMask(int prefixLength) =>
         prefixLength == 0 ? 0 : uint.MaxValue << (32 - prefixLength);

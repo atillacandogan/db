@@ -513,6 +513,18 @@ public sealed class ScanWorkflowTests
         public Task<Target?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             Task.FromResult(_targets.SingleOrDefault(target => target.Id == id));
 
+        public Task<Target?> FindByEndpointAsync(
+            string normalizedHost,
+            int port,
+            DatabaseEngine engine,
+            Guid? excludeTargetId = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(_targets.FirstOrDefault(target =>
+                target.Id != excludeTargetId
+                && target.Host.Equals(normalizedHost, StringComparison.OrdinalIgnoreCase)
+                && target.Port == port
+                && target.Engine == engine));
+
         public Task AddAsync(Target target, CancellationToken cancellationToken = default)
         {
             _targets.Add(target);
@@ -533,7 +545,13 @@ public sealed class ScanWorkflowTests
         public Task<IReadOnlyList<ScanScopeAllowlist>> ListEnabledAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<ScanScopeAllowlist>>([]);
 
-        public Task<bool> IsAllowedAsync(string host, int port, CancellationToken cancellationToken = default) =>
+        public Task<IReadOnlyList<ScanScopeAllowlist>> ListAsync(string? environment = null, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ScanScopeAllowlist>>([]);
+        public Task<ScanScopeAllowlist?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<ScanScopeAllowlist?>(null);
+        public Task AddAsync(ScanScopeAllowlist entry, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteAsync(ScanScopeAllowlist entry, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<bool> IsAllowedAsync(string host, int port, string environment, DatabaseEngine engine, CancellationToken cancellationToken = default) =>
             Task.FromResult(isAllowed);
     }
 

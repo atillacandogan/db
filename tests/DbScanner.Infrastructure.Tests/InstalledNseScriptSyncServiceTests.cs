@@ -42,9 +42,13 @@ public sealed class InstalledNseScriptSyncServiceTests
             Assert.Equal(2, result.DiscoveredCount);
             Assert.Equal(1, result.AddedCount);
             Assert.Equal(0, result.UpdatedCount);
+            Assert.Equal(1, result.SkippedCount);
+            Assert.Equal(0, result.FailedCount);
             Assert.Equal(0, secondResult.AddedCount);
             Assert.Equal(0, secondResult.UpdatedCount);
             Assert.Equal(1, secondResult.UnchangedCount);
+            Assert.Equal(1, secondResult.SkippedCount);
+            Assert.Equal(0, secondResult.FailedCount);
             Assert.Single(scripts);
             Assert.DoesNotContain(scripts, script => script.Id == "2");
             Assert.Contains(scripts, script => script.Id == "banner");
@@ -107,9 +111,88 @@ public sealed class InstalledNseScriptSyncServiceTests
 
             Assert.Equal(0, result.AddedCount);
             Assert.Equal(2, result.UpdatedCount);
-            Assert.Equal(1, result.UnchangedCount);
+            Assert.Equal(0, result.UnchangedCount);
+            Assert.Equal(1, result.SkippedCount);
+            Assert.Equal(0, result.FailedCount);
             Assert.Equal(1, result.UninstalledCount);
             Assert.Equal(3, scripts.Count);
+        }
+        finally
+        {
+            Directory.Delete(scriptDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SyncInstalledScriptsAsync_PreservesInstalledRecordsWhenSourceDirectoryIsEmpty()
+    {
+        var scriptDirectory = Path.Combine(Path.GetTempPath(), $"dbscanner-nse-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scriptDirectory);
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<DbScannerDbContext>()
+                .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+                .Options;
+            await using var dbContext = new DbScannerDbContext(dbOptions);
+            dbContext.NseScripts.Add(CreateScript("banner", NseScriptSource.Installed, "Banner", true));
+            await dbContext.SaveChangesAsync();
+
+            var repository = new NseScriptRepository(dbContext);
+            var service = new InstalledNseScriptSyncService(
+                repository,
+                Options.Create(new NseScriptDiscoveryOptions { ScriptDirectory = scriptDirectory }),
+                NullLogger<InstalledNseScriptSyncService>.Instance);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => service.SyncInstalledScriptsAsync());
+
+            Assert.Contains("existing installed records were preserved", exception.Message);
+            Assert.True(Assert.Single(await repository.ListAsync()).IsInstalled);
+        }
+        finally
+        {
+            Directory.Delete(scriptDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SyncInstalledScriptsAsync_ContinuesAfterUnreadableScriptAndPreservesItsExistingRecord()
+    {
+        var scriptDirectory = Path.Combine(Path.GetTempPath(), $"dbscanner-nse-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scriptDirectory);
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(scriptDirectory, "banner.nse"),
+                "description = \"Collects a banner.\" categories = { \"safe\" }");
+            File.CreateSymbolicLink(
+                Path.Combine(scriptDirectory, "broken.nse"),
+                Path.Combine(scriptDirectory, "missing-target.nse"));
+
+            var dbOptions = new DbContextOptionsBuilder<DbScannerDbContext>()
+                .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+                .Options;
+            await using var dbContext = new DbScannerDbContext(dbOptions);
+            dbContext.NseScripts.Add(CreateScript("broken", NseScriptSource.Installed, "Existing", true));
+            await dbContext.SaveChangesAsync();
+
+            var repository = new NseScriptRepository(dbContext);
+            var service = new InstalledNseScriptSyncService(
+                repository,
+                Options.Create(new NseScriptDiscoveryOptions { ScriptDirectory = scriptDirectory }),
+                NullLogger<InstalledNseScriptSyncService>.Instance);
+
+            var result = await service.SyncInstalledScriptsAsync();
+            var scripts = await repository.ListAsync();
+
+            Assert.Equal(2, result.DiscoveredCount);
+            Assert.Equal(1, result.AddedCount);
+            Assert.Equal(1, result.FailedCount);
+            Assert.Equal(0, result.UninstalledCount);
+            Assert.True(Assert.Single(scripts, script => script.Id == "broken").IsInstalled);
+            Assert.Contains(scripts, script => script.Id == "banner");
         }
         finally
         {

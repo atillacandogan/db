@@ -8,10 +8,13 @@ public sealed class DiscoveredDatabase
     public Guid DiscoveryJobId { get; set; }
     public DiscoveryJob? DiscoveryJob { get; set; }
     public required string Host { get; set; }
+    public string NormalizedHost { get; set; } = string.Empty;
+    public string EnvironmentTag { get; set; } = string.Empty;
     public int Port { get; set; }
     public required string DetectedService { get; set; }
     public DatabaseEngine? DetectedEngine { get; set; }
     public int Confidence { get; set; }
+    public DiscoveryFingerprintLevel FingerprintLevel { get; set; } = DiscoveryFingerprintLevel.Unknown;
     public DiscoveryResultStatus Status { get; set; }
     public required string Reason { get; set; }
     public Guid? TargetId { get; set; }

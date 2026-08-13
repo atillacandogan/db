@@ -10,15 +10,26 @@ internal sealed class PostgreSqlDiscoveryDetector : IDatabaseFingerprintDetector
 
     public DiscoveryFingerprint? Detect(DiscoveryProbeResult probeResult)
     {
-        if (probeResult.Port != 5432)
+        if (probeResult.ProtocolEvidence == TcpDiscoveryProbe.PostgreSqlSslEvidence)
+        {
+            return new DiscoveryFingerprint(
+                "PostgreSQL",
+                DatabaseEngine.PostgreSql,
+                98,
+                DiscoveryFingerprintLevel.Confirmed);
+        }
+
+        if (probeResult.ProtocolEvidence is not null
+            || probeResult.ExpectedEngine != DatabaseEngine.PostgreSql
+                && (probeResult.ExpectedEngine is not null || probeResult.Port != 5432))
         {
             return null;
         }
 
-        var banner = DiscoveryDetectorText.Banner(probeResult.Banner);
         return new DiscoveryFingerprint(
-            "PostgreSQL",
-            DatabaseEngine.PostgreSql,
-            banner.Contains("postgres", StringComparison.OrdinalIgnoreCase) ? 95 : 70);
+            "Unconfirmed service on a PostgreSQL-associated port",
+            null,
+            30,
+            DiscoveryFingerprintLevel.PortHint);
     }
 }

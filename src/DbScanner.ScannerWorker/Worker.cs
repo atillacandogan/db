@@ -12,7 +12,17 @@ public class Worker(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("DbScanner worker starting.");
-        await SyncInstalledNseScriptsAsync(stoppingToken);
+        try
+        {
+            await SyncInstalledNseScriptsAsync(stoppingToken);
+        }
+        catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
+        {
+            logger.LogError(
+                exception,
+                "Initial NSE script synchronization failed. The worker will continue so synchronization can be retried.");
+        }
+
         await Task.WhenAll(
             scanJobConsumer.StartAsync(stoppingToken),
             nseScriptSyncConsumer.StartAsync(stoppingToken),
@@ -26,12 +36,14 @@ public class Worker(
         var result = await syncService.SyncInstalledScriptsAsync(cancellationToken);
 
         logger.LogInformation(
-            "NSE scripts synced from {ScriptDirectory}. Discovered: {DiscoveredCount}, added: {AddedCount}, updated: {UpdatedCount}, unchanged: {UnchangedCount}, uninstalled: {UninstalledCount}.",
+            "NSE scripts synced from {ScriptDirectory}. Discovered: {DiscoveredCount}, added: {AddedCount}, updated: {UpdatedCount}, unchanged: {UnchangedCount}, skipped: {SkippedCount}, failed: {FailedCount}, uninstalled: {UninstalledCount}.",
             result.ScriptDirectory,
             result.DiscoveredCount,
             result.AddedCount,
             result.UpdatedCount,
             result.UnchangedCount,
+            result.SkippedCount,
+            result.FailedCount,
             result.UninstalledCount);
     }
 }

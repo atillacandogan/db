@@ -88,4 +88,210 @@ public sealed class DbScannerDbContextTests
 
         Assert.Empty(scripts);
     }
+
+    [Fact]
+    public async Task FindingRepository_ListAllAsync_IsNotLimitedToLatestFifty()
+    {
+        var options = new DbContextOptionsBuilder<DbScannerDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var dbContext = new DbScannerDbContext(options);
+        var target = new Target
+        {
+            Name = "Export Target",
+            Host = "export-db.internal",
+            NormalizedHost = "export-db.internal",
+            Port = 5432,
+            Engine = DatabaseEngine.PostgreSql
+        };
+        var scan = new Scan
+        {
+            Target = target,
+            TargetId = target.Id,
+            Status = ScanStatus.Scanned,
+            RiskScore = 42,
+            OverallSeverity = Severity.Medium
+        };
+        var detectedAt = DateTimeOffset.UtcNow.AddHours(-1);
+
+        dbContext.Findings.AddRange(Enumerable.Range(1, 75).Select(index => new Finding
+        {
+            Scan = scan,
+            ScanId = scan.Id,
+            Target = target,
+            TargetId = target.Id,
+            RuleId = $"export-rule-{index}",
+            Title = $"Export finding {index}",
+            Severity = Severity.Low,
+            ScoreContribution = index,
+            Evidence = "Türkçe kanıt: şğüöçİı",
+            Remediation = "Fix the configuration.",
+            SourceScript = "export-check",
+            DetectedAt = detectedAt.AddMinutes(index)
+        }));
+        await dbContext.SaveChangesAsync();
+        var repository = new FindingRepository(dbContext);
+
+        var latest = await repository.ListLatestAsync(50);
+        var all = await repository.ListAllAsync();
+
+        Assert.Equal(50, latest.Count);
+        Assert.Equal(75, all.Count);
+        Assert.Equal("export-rule-75", all[0].RuleId);
+        Assert.Equal("export-rule-1", all[^1].RuleId);
+    }
+
+    [Fact]
+    public async Task DiscoveryRepository_RefreshesDuplicateResultInsteadOfCreatingAnotherRecord()
+    {
+        var options = new DbContextOptionsBuilder<DbScannerDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+        await using var dbContext = new DbScannerDbContext(options);
+        var firstJob = DiscoveryJob("first");
+        var secondJob = DiscoveryJob("second");
+        dbContext.DiscoveryJobs.AddRange(firstJob, secondJob);
+        dbContext.DiscoveredDatabases.Add(new DiscoveredDatabase
+        {
+            DiscoveryJobId = firstJob.Id,
+            Host = "DB.INTERNAL.",
+            NormalizedHost = "db.internal",
+            EnvironmentTag = "demo",
+            Port = 3306,
+            DetectedService = "MySQL",
+            DetectedEngine = DatabaseEngine.MySql,
+            Confidence = 70,
+            FingerprintLevel = DiscoveryFingerprintLevel.Probable,
+            Status = DiscoveryResultStatus.Supported,
+            Reason = "Initial discovery"
+        });
+        await dbContext.SaveChangesAsync();
+        var repository = new DiscoveryRepository(dbContext);
+
+        await repository.CompleteAsync(secondJob.Id, [new DiscoveredDatabase
+        {
+            DiscoveryJobId = secondJob.Id,
+            Host = "db.internal",
+            NormalizedHost = "db.internal",
+            EnvironmentTag = "demo",
+            Port = 3306,
+            DetectedService = "MySQL",
+            DetectedEngine = DatabaseEngine.MySql,
+            Confidence = 96,
+            FingerprintLevel = DiscoveryFingerprintLevel.Confirmed,
+            Status = DiscoveryResultStatus.Supported,
+            Reason = "Confirmed again"
+        }]);
+
+        var result = Assert.Single(await dbContext.DiscoveredDatabases.ToListAsync());
+        Assert.Equal(secondJob.Id, result.DiscoveryJobId);
+        Assert.Equal(DiscoveryResultStatus.AlreadyDiscovered, result.Status);
+        Assert.Equal(96, result.Confidence);
+    }
+
+    [Fact]
+    public async Task DiscoveryRepository_RefreshesUnsupportedResultWithoutPromotingIt()
+    {
+        var options = new DbContextOptionsBuilder<DbScannerDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+        await using var dbContext = new DbScannerDbContext(options);
+        var firstJob = DiscoveryJob("first-unsupported");
+        var secondJob = DiscoveryJob("second-unsupported");
+        dbContext.DiscoveryJobs.AddRange(firstJob, secondJob);
+        dbContext.DiscoveredDatabases.Add(new DiscoveredDatabase
+        {
+            DiscoveryJobId = firstJob.Id,
+            Host = "redis.internal",
+            NormalizedHost = "redis.internal",
+            EnvironmentTag = "demo",
+            Port = 6379,
+            DetectedService = "Redis",
+            DetectedEngine = null,
+            Confidence = 65,
+            FingerprintLevel = DiscoveryFingerprintLevel.PortOnly,
+            Status = DiscoveryResultStatus.Unsupported,
+            Reason = "Redis is not supported yet."
+        });
+        await dbContext.SaveChangesAsync();
+        var repository = new DiscoveryRepository(dbContext);
+
+        await repository.CompleteAsync(secondJob.Id, [new DiscoveredDatabase
+        {
+            DiscoveryJobId = secondJob.Id,
+            Host = "redis.internal",
+            NormalizedHost = "redis.internal",
+            EnvironmentTag = "demo",
+            Port = 6379,
+            DetectedService = "Redis",
+            DetectedEngine = null,
+            Confidence = 65,
+            FingerprintLevel = DiscoveryFingerprintLevel.PortOnly,
+            Status = DiscoveryResultStatus.Unsupported,
+            Reason = "Redis is not supported yet."
+        }]);
+
+        var result = Assert.Single(await dbContext.DiscoveredDatabases.ToListAsync());
+        Assert.Equal(secondJob.Id, result.DiscoveryJobId);
+        Assert.Equal(DiscoveryResultStatus.Unsupported, result.Status);
+        Assert.Equal("Redis is not supported yet.", result.Reason);
+    }
+
+    [Fact]
+    public async Task DiscoveryRepository_Delete_RemovesJobAndCascadesOnlyItsResults()
+    {
+        var options = new DbContextOptionsBuilder<DbScannerDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+        await using var dbContext = new DbScannerDbContext(options);
+        var job = DiscoveryJob("delete-me");
+        job.Status = DiscoveryStatus.Completed;
+        var target = new Target
+        {
+            Name = "Registered MySQL",
+            Host = "db.internal",
+            NormalizedHost = "db.internal",
+            Port = 3306,
+            Engine = DatabaseEngine.MySql,
+            EnvironmentTag = "demo"
+        };
+        var result = new DiscoveredDatabase
+        {
+            DiscoveryJobId = job.Id,
+            Host = "db.internal",
+            NormalizedHost = "db.internal",
+            EnvironmentTag = "demo",
+            Port = 3306,
+            DetectedService = "MySQL",
+            DetectedEngine = DatabaseEngine.MySql,
+            Confidence = 90,
+            FingerprintLevel = DiscoveryFingerprintLevel.Confirmed,
+            Status = DiscoveryResultStatus.Supported,
+            Reason = "Supported",
+            TargetId = target.Id
+        };
+        job.Results.Add(result);
+        dbContext.Targets.Add(target);
+        dbContext.DiscoveryJobs.Add(job);
+        await dbContext.SaveChangesAsync();
+        var repository = new DiscoveryRepository(dbContext);
+
+        var persistedJob = await repository.GetByIdAsync(job.Id);
+        await repository.DeleteAsync(persistedJob!);
+        await repository.SaveChangesAsync();
+
+        Assert.False(await dbContext.DiscoveryJobs.AnyAsync(candidate => candidate.Id == job.Id));
+        Assert.False(await dbContext.DiscoveredDatabases.AnyAsync(candidate => candidate.Id == result.Id));
+        Assert.True(await dbContext.Targets.AnyAsync(candidate => candidate.Id == target.Id));
+    }
+
+    private static DiscoveryJob DiscoveryJob(string name) => new()
+    {
+        Name = name,
+        ScopeInput = "db.internal",
+        EnvironmentTag = "demo",
+        SupportedEngineFilter = "mysql",
+        Status = DiscoveryStatus.Running
+    };
 }

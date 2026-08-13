@@ -31,6 +31,12 @@ internal sealed class DiscoveryRepository(DbScannerDbContext dbContext) : IDisco
     public async Task AddAsync(DiscoveryJob job, CancellationToken cancellationToken = default) =>
         await dbContext.DiscoveryJobs.AddAsync(job, cancellationToken);
 
+    public Task DeleteAsync(DiscoveryJob job, CancellationToken cancellationToken = default)
+    {
+        dbContext.DiscoveryJobs.Remove(job);
+        return Task.CompletedTask;
+    }
+
     public async Task<bool> TryMarkRunningAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
         var updated = await dbContext.DiscoveryJobs
@@ -51,7 +57,39 @@ internal sealed class DiscoveryRepository(DbScannerDbContext dbContext) : IDisco
     {
         var job = await dbContext.DiscoveryJobs.FirstOrDefaultAsync(candidate => candidate.Id == jobId, cancellationToken)
             ?? throw new InvalidOperationException("Discovery job was not found.");
-        await dbContext.DiscoveredDatabases.AddRangeAsync(results, cancellationToken);
+        foreach (var result in results)
+        {
+            var existing = await dbContext.DiscoveredDatabases.FirstOrDefaultAsync(candidate =>
+                candidate.DiscoveryJobId != jobId
+                && candidate.NormalizedHost == result.NormalizedHost
+                && candidate.Port == result.Port
+                && candidate.DetectedEngine == result.DetectedEngine
+                && candidate.EnvironmentTag == result.EnvironmentTag,
+                cancellationToken);
+            if (existing is null)
+            {
+                await dbContext.DiscoveredDatabases.AddAsync(result, cancellationToken);
+                continue;
+            }
+
+            existing.DiscoveryJobId = jobId;
+            existing.Host = result.Host;
+            existing.NormalizedHost = result.NormalizedHost;
+            existing.DetectedService = result.DetectedService;
+            existing.Confidence = result.Confidence;
+            existing.FingerprintLevel = result.FingerprintLevel;
+            existing.Status = existing.TargetId.HasValue
+                ? DiscoveryResultStatus.AddedAsTarget
+                : result.Status == DiscoveryResultStatus.Unsupported || result.DetectedEngine is null
+                    ? DiscoveryResultStatus.Unsupported
+                    : DiscoveryResultStatus.AlreadyDiscovered;
+            existing.Reason = existing.TargetId.HasValue
+                ? "Previously discovered and already present in the target inventory."
+                : existing.Status == DiscoveryResultStatus.Unsupported
+                    ? result.Reason
+                    : "Previously discovered; the existing discovery result was refreshed.";
+            existing.CreatedAt = DateTimeOffset.UtcNow;
+        }
         job.Status = DiscoveryStatus.Completed;
         job.FinishedAt = DateTimeOffset.UtcNow;
         job.ErrorMessage = null;

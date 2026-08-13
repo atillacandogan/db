@@ -1,3 +1,4 @@
+using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.DependencyInjection;
 
 var builder = DistributedApplication.CreateBuilder(args);
@@ -16,28 +17,56 @@ builder.Services
 
 var applicationPostgres = builder
     .AddPostgres("application-postgres")
-    .WithDataVolume();
+    .WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent);
 
 var applicationDatabase = applicationPostgres.AddDatabase("dbscanner");
 
 var rabbitMq = builder
     .AddRabbitMQ("rabbitmq")
     .WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent)
     .WithManagementPlugin();
+
+var keycloakPostgresUserName = builder.AddParameter(
+    "keycloak-postgres-username",
+    "keycloak");
+var keycloakPostgres = builder
+    .AddPostgres(
+        "keycloak-postgres",
+        userName: keycloakPostgresUserName)
+    .WithImageTag("17.6")
+    .WithDataVolume("dbscanner-keycloak-postgres-data")
+    .WithLifetime(ContainerLifetime.Persistent);
+var keycloakDatabase = keycloakPostgres.AddDatabase(
+    "keycloak-database",
+    databaseName: "keycloak");
 
 var keycloakAdminPassword = builder.AddParameter("keycloak-admin-password", secret: true);
 var keycloak = builder
     .AddContainer("keycloak", KeycloakImage, KeycloakImageTag)
+    .WithLifetime(ContainerLifetime.Persistent)
     .WithEnvironment("KC_BOOTSTRAP_ADMIN_USERNAME", "admin")
     .WithEnvironment("KC_BOOTSTRAP_ADMIN_PASSWORD", keycloakAdminPassword)
+    .WithEnvironment("KC_DB", "postgres")
+    .WithEnvironment(
+        "KC_DB_URL",
+        ReferenceExpression.Create(
+            $"{keycloakPostgres.Resource.JdbcConnectionString}/keycloak"))
+    .WithEnvironment("KC_DB_USERNAME", keycloakPostgresUserName)
+    .WithEnvironment(
+        "KC_DB_PASSWORD",
+        ReferenceExpression.Create(
+            $"{keycloakPostgres.Resource.PasswordParameter}"))
     .WithArgs("start-dev", "--import-realm")
-    .WithVolume("dbscanner-keycloak-data", "/opt/keycloak/data")
     .WithBindMount(
         "../../docker/keycloak/import",
         "/opt/keycloak/data/import",
         isReadOnly: true)
     .WithHttpEndpoint(targetPort: 8080, port: 18080, name: "http", isProxied: false)
-    .WithHttpHealthCheck("/realms/dbscanner", endpointName: "http");
+    .WithHttpHealthCheck("/realms/dbscanner", endpointName: "http")
+    .WithReference(keycloakDatabase)
+    .WaitFor(keycloakDatabase);
 
 var demoPostgresPassword = builder.AddParameter("demo-postgres-password", "dbscanner", secret: true);
 var demoPostgresTarget = builder
@@ -75,6 +104,10 @@ var demoMySqlRootEmptyTarget = builder
     .WithEnvironment("MYSQL_DATABASE", "root_empty_demo")
     .WithEndpoint(targetPort: 3306, port: 13308, scheme: "tcp", name: "mysql");
 
+var demoRedisUnsupportedTarget = builder
+    .AddContainer("demo-redis-unsupported-target", "redis", "7.4-alpine")
+    .WithEndpoint(targetPort: 6379, port: 16379, scheme: "tcp", name: "redis");
+
 var demoMsSqlPassword = builder.AddParameter("demo-mssql-password", secret: true);
 var demoMsSqlAppPassword = builder.AddParameter("demo-mssql-app-password", secret: true);
 var demoMsSqlScannerPassword = builder.AddParameter("demo-mssql-scanner-password", secret: true);
@@ -86,6 +119,7 @@ var scannerCredentialProtectionKey = builder.AddParameter(
     secret: true);
 var demoMsSqlTarget = builder
     .AddContainer("demo-mssql-target", MsSqlImage, MsSqlImageTag)
+    .WithLifetime(ContainerLifetime.Persistent)
     .WithEnvironment("ACCEPT_EULA", "Y")
     .WithEnvironment("MSSQL_PID", "Developer")
     .WithEnvironment("MSSQL_SA_PASSWORD", demoMsSqlPassword)
@@ -127,6 +161,7 @@ var demoOracleScannerPassword = builder.AddParameter(
     secret: true);
 var demoOracleTarget = builder
     .AddContainer("demo-oracle-target", OracleImage, OracleImageTag)
+    .WithLifetime(ContainerLifetime.Persistent)
     .WithEnvironment("ORACLE_PASSWORD", demoOraclePassword)
     .WithEnvironment("APP_USER", "dbscanner_scanner")
     .WithEnvironment("APP_USER_PASSWORD", demoOracleScannerPassword)
@@ -139,12 +174,23 @@ var demoOracleTarget = builder
     .WithHealthCheck("demo-oracle-ready");
 
 var api = builder
-    .AddProject<Projects.DbScanner_Api>("api")
+    .AddExecutable(
+        "api",
+        "dotnet",
+        "../DbScanner.Api",
+        "run",
+        "--project",
+        "DbScanner.Api.csproj",
+        "--no-build",
+        "--launch-profile",
+        "http")
+    .WithHttpEndpoint(targetPort: 5166, port: 5166, name: "http", isProxied: false)
     .WithReference(applicationDatabase)
     .WithReference(rabbitMq)
     .WithEnvironment("Authentication__Authority", "http://localhost:18080/realms/dbscanner")
     .WithEnvironment("Authentication__Audience", "dbscanner-api")
     .WithEnvironment("Authentication__RequireHttpsMetadata", "false")
+    .WithEnvironment("Discovery__MaxCidrHosts", "512")
     .WithEnvironment("CredentialProtection__Key", scannerCredentialProtectionKey)
     .WaitFor(applicationDatabase)
     .WaitFor(rabbitMq)
@@ -158,10 +204,15 @@ builder
     .WithEnvironment("Scanner__ExecutablePath", "/usr/bin/nmap")
     .WithEnvironment("Scanner__UseSampleOutputWhenUnavailable", "false")
     .WithEnvironment("Discovery__ConnectTimeoutMilliseconds", "1000")
-    .WithEnvironment("Discovery__BannerReadTimeoutMilliseconds", "200")
+    .WithEnvironment("Discovery__BannerReadTimeoutMilliseconds", "1000")
+    .WithEnvironment("Discovery__DnsTimeoutMilliseconds", "2000")
+    .WithEnvironment("Discovery__JobTimeoutSeconds", "600")
     .WithEnvironment("Discovery__MaxConcurrency", "8")
     .WithEnvironment("Discovery__MaxProbesPerSecond", "20")
-    .WithEnvironment("Discovery__MaxHosts", "256")
+    .WithEnvironment("Discovery__ProbeDelayMilliseconds", "50")
+    .WithEnvironment("Discovery__MaxCidrHosts", "512")
+    .WithEnvironment("Discovery__MaxPortsPerTarget", "16")
+    .WithEnvironment("Discovery__MaxBannerBytes", "512")
     .WithEnvironment("CredentialProtection__Key", scannerCredentialProtectionKey)
     .WaitFor(applicationDatabase)
     .WaitFor(rabbitMq)
@@ -169,6 +220,7 @@ builder
     .WaitFor(demoMySqlTarget)
     .WaitFor(demoMySqlSecureTarget)
     .WaitFor(demoMySqlRootEmptyTarget)
+    .WaitFor(demoRedisUnsupportedTarget)
     .WaitForCompletion(demoMsSqlInit)
     .WaitFor(demoOracleTarget);
 
@@ -179,7 +231,6 @@ builder
     .WithEnvironment("NEXT_PUBLIC_KEYCLOAK_URL", "http://localhost:18080")
     .WithEnvironment("NEXT_PUBLIC_KEYCLOAK_REALM", "dbscanner")
     .WithEnvironment("NEXT_PUBLIC_KEYCLOAK_CLIENT_ID", "dbscanner-web")
-    .WithReference(api)
     .WaitFor(keycloak)
     .WaitFor(demoPostgresTarget)
     .WaitFor(demoMySqlTarget)

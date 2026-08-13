@@ -2,6 +2,7 @@ using DbScanner.Application;
 using DbScanner.Api.Contracts;
 using DbScanner.Api.Mapping;
 using DbScanner.Api.Security;
+using DbScanner.Application.Exceptions;
 using DbScanner.Application.Models;
 using DbScanner.Application.Ports;
 using DbScanner.Domain.Enums;
@@ -95,6 +96,18 @@ app.MapGet("/api/findings", async (
 .Produces(StatusCodes.Status200OK)
 .ProducesProblem(StatusCodes.Status500InternalServerError)
 .WithName("GetFindings")
+.RequireAuthorization(AuthorizationPolicies.Viewer);
+
+app.MapGet("/api/findings/export", async (
+    IFindingCatalogService findingCatalogService,
+    CancellationToken cancellationToken) =>
+{
+    var findings = await findingCatalogService.ListAllAsync(cancellationToken);
+    return Results.Ok(findings);
+})
+.Produces(StatusCodes.Status200OK)
+.ProducesProblem(StatusCodes.Status500InternalServerError)
+.WithName("ExportFindings")
 .RequireAuthorization(AuthorizationPolicies.Viewer);
 
 app.MapGet("/api/rules", async (
@@ -220,7 +233,7 @@ app.MapPost("/api/nse-scripts/sync", async (
     catch (Exception exception) when (exception is InvalidOperationException or TimeoutException)
     {
         return Results.Json(
-            new { error = "NSE script sync failed." },
+            new { error = exception.Message },
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 })
@@ -361,9 +374,20 @@ app.MapPost("/api/targets", async (
 
         return Results.Created($"/api/targets/{target.Id}", target);
     }
+    catch (TargetAlreadyExistsException exception)
+    {
+        return Results.Json(
+            new
+            {
+                code = TargetAlreadyExistsException.ErrorCode,
+                message = TargetAlreadyExistsException.UserMessage,
+                existingTargetId = exception.ExistingTargetId
+            },
+            statusCode: StatusCodes.Status409Conflict);
+    }
     catch (InvalidOperationException exception)
     {
-        return Results.BadRequest(new { error = exception.Message });
+        return Results.BadRequest(new { code = "TARGET_VALIDATION_FAILED", message = exception.Message });
     }
 })
 .WithName("CreateTarget")
@@ -392,9 +416,20 @@ app.MapPut("/api/targets/{id:guid}", async (
 
         return Results.Ok(target);
     }
+    catch (TargetAlreadyExistsException exception)
+    {
+        return Results.Json(
+            new
+            {
+                code = TargetAlreadyExistsException.ErrorCode,
+                message = TargetAlreadyExistsException.UserMessage,
+                existingTargetId = exception.ExistingTargetId
+            },
+            statusCode: StatusCodes.Status409Conflict);
+    }
     catch (InvalidOperationException exception)
     {
-        return Results.BadRequest(new { error = exception.Message });
+        return Results.BadRequest(new { code = "TARGET_VALIDATION_FAILED", message = exception.Message });
     }
 })
 .WithName("UpdateTarget")
@@ -418,6 +453,87 @@ app.MapDelete("/api/targets/{id:guid}", async (
 .WithName("DeleteTarget")
 .RequireAuthorization(AuthorizationPolicies.Admin);
 
+app.MapGet("/api/discovery-allowlist", async (
+    string? environment,
+    IDiscoveryAllowlistService allowlistService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Ok(await allowlistService.ListAsync(environment, cancellationToken));
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.BadRequest(new { code = "ALLOWLIST_VALIDATION_FAILED", message = exception.Message });
+    }
+})
+.WithName("ListDiscoveryAllowlist")
+.RequireAuthorization(AuthorizationPolicies.Viewer);
+
+app.MapPost("/api/discovery-allowlist", async (
+    CreateDiscoveryAllowlistRequest request,
+    IDiscoveryAllowlistService allowlistService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var created = await allowlistService.CreateAsync(ToAllowlistCommand(request), cancellationToken);
+        return Results.Created($"/api/discovery-allowlist/{created.Id}", created);
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.BadRequest(new { code = "ALLOWLIST_VALIDATION_FAILED", message = exception.Message });
+    }
+})
+.WithName("CreateDiscoveryAllowlist")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPut("/api/discovery-allowlist/{id:guid}", async (
+    Guid id,
+    UpdateDiscoveryAllowlistRequest request,
+    IDiscoveryAllowlistService allowlistService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Ok(await allowlistService.UpdateAsync(id, ToUpdateAllowlistCommand(request), cancellationToken));
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.BadRequest(new { code = "ALLOWLIST_VALIDATION_FAILED", message = exception.Message });
+    }
+})
+.WithName("UpdateDiscoveryAllowlist")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPatch("/api/discovery-allowlist/{id:guid}/active", async (
+    Guid id,
+    SetDiscoveryAllowlistActiveRequest request,
+    IDiscoveryAllowlistService allowlistService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Ok(await allowlistService.SetActiveAsync(id, request.IsActive, cancellationToken));
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.BadRequest(new { code = "ALLOWLIST_VALIDATION_FAILED", message = exception.Message });
+    }
+})
+.WithName("SetDiscoveryAllowlistActive")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapDelete("/api/discovery-allowlist/{id:guid}", async (
+    Guid id,
+    IDiscoveryAllowlistService allowlistService,
+    CancellationToken cancellationToken) =>
+    await allowlistService.DeleteAsync(id, cancellationToken)
+        ? Results.NoContent()
+        : Results.NotFound())
+.WithName("DeleteDiscoveryAllowlist")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
 app.MapGet("/api/discoveries", async (
     IDiscoveryService discoveryService,
     CancellationToken cancellationToken) =>
@@ -427,6 +543,36 @@ app.MapGet("/api/discoveries", async (
 })
 .WithName("ListDiscoveryJobs")
 .RequireAuthorization(AuthorizationPolicies.Viewer);
+
+app.MapGet("/api/discoveries/local-networks", async (
+    IDiscoveryService discoveryService,
+    CancellationToken cancellationToken) =>
+    Results.Ok(await discoveryService.ListLocalNetworksAsync(cancellationToken)))
+.WithName("ListLocalDiscoveryNetworks")
+.RequireAuthorization(AuthorizationPolicies.Operator);
+
+app.MapPost("/api/discoveries/local-network", async (
+    CreateLocalNetworkDiscoveryRequest request,
+    IDiscoveryService discoveryService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var job = await discoveryService.CreateLocalNetworkAsync(
+            request.Name,
+            request.Environment,
+            ParseDiscoveryEngines(request.SupportedEngineFilter),
+            request.Networks,
+            cancellationToken);
+        return Results.Accepted($"/api/discoveries/{job.Id}", job);
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.BadRequest(new { code = "LOCAL_NETWORK_DISCOVERY_FAILED", message = exception.Message });
+    }
+})
+.WithName("CreateLocalNetworkDiscovery")
+.RequireAuthorization(AuthorizationPolicies.Operator);
 
 app.MapGet("/api/discoveries/{id:guid}", async (
     Guid id,
@@ -438,6 +584,28 @@ app.MapGet("/api/discoveries/{id:guid}", async (
 })
 .WithName("GetDiscoveryJob")
 .RequireAuthorization(AuthorizationPolicies.Viewer);
+
+app.MapDelete("/api/discoveries/{id:guid}", async (
+    Guid id,
+    IDiscoveryService discoveryService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return await discoveryService.DeleteAsync(id, cancellationToken)
+            ? Results.NoContent()
+            : Results.NotFound();
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.Conflict(new { code = "DISCOVERY_JOB_DELETE_BLOCKED", message = exception.Message });
+    }
+})
+.Produces(StatusCodes.Status204NoContent)
+.Produces(StatusCodes.Status404NotFound)
+.Produces(StatusCodes.Status409Conflict)
+.WithName("DeleteDiscoveryJob")
+.RequireAuthorization(AuthorizationPolicies.Operator);
 
 app.MapPost("/api/discoveries", async (
     CreateDiscoveryRequest request,
@@ -451,7 +619,8 @@ app.MapPost("/api/discoveries", async (
                 request.Name,
                 request.Scope,
                 request.Environment,
-                ParseDiscoveryEngines(request.SupportedEngineFilter)),
+                ParseDiscoveryEngines(request.SupportedEngineFilter),
+                request.UseAuthorizedScope ?? string.IsNullOrWhiteSpace(request.Scope)),
             cancellationToken);
         return Results.Accepted($"/api/discoveries/{job.Id}", job);
     }
@@ -463,24 +632,108 @@ app.MapPost("/api/discoveries", async (
 .WithName("CreateDiscoveryJob")
 .RequireAuthorization(AuthorizationPolicies.Operator);
 
-app.MapPost("/api/discoveries/{id:guid}/targets", async (
-    Guid id,
-    AddDiscoveryTargetsRequest request,
+app.MapPost("/api/discoveries/validate-scope", async (
+    ValidateDiscoveryScopeRequest request,
     IDiscoveryService discoveryService,
     CancellationToken cancellationToken) =>
 {
     try
     {
-        var results = await discoveryService.AddTargetsAsync(id, request.ResultIds, cancellationToken);
-        return Results.Ok(results);
+        return Results.Ok(await discoveryService.ValidateScopeAsync(
+            request.Scope,
+            request.Environment,
+            ParseDiscoveryEngines(request.SupportedEngineFilter),
+            cancellationToken));
     }
     catch (InvalidOperationException exception)
     {
-        return Results.BadRequest(new { error = exception.Message });
+        return Results.BadRequest(new { code = "DISCOVERY_SCOPE_VALIDATION_FAILED", message = exception.Message });
     }
 })
+.WithName("ValidateDiscoveryScope")
+.RequireAuthorization(AuthorizationPolicies.Operator);
+
+app.MapPost("/api/discoveries/{id:guid}/targets", async (
+    Guid id,
+    AddDiscoveryTargetsRequest request,
+    IDiscoveryService discoveryService,
+    ILoggerFactory loggerFactory,
+    CancellationToken cancellationToken) =>
+{
+    var logger = loggerFactory.CreateLogger("DiscoveryTargetEndpoints");
+    try
+    {
+        var results = await discoveryService.AddTargetsAsync(
+            id,
+            request.ResultIds,
+            request.IsBulk,
+            cancellationToken);
+        logger.LogInformation(
+            "Discovery target add completed for job {DiscoveryJobId}: {AddedCount} added, {ExistingCount} existing, {FailedCount} failed.",
+            id,
+            results.AddedCount,
+            results.AlreadyExistingCount,
+            results.FailedCount);
+        return Results.Ok(results);
+    }
+    catch (TargetAlreadyExistsException exception)
+    {
+        logger.LogInformation(
+            "Discovery target already exists for job {DiscoveryJobId}. Existing target: {ExistingTargetId}.",
+            id,
+            exception.ExistingTargetId);
+        return Results.Json(
+            new
+            {
+                code = TargetAlreadyExistsException.ErrorCode,
+                message = TargetAlreadyExistsException.UserMessage,
+                existingTargetId = exception.ExistingTargetId
+            },
+            statusCode: StatusCodes.Status409Conflict);
+    }
+    catch (DiscoveryTargetNotSupportedException)
+    {
+        logger.LogInformation(
+            "Unsupported discovery result was rejected for job {DiscoveryJobId}.",
+            id);
+        return Results.BadRequest(new
+        {
+            code = DiscoveryTargetNotSupportedException.ErrorCode,
+            message = DiscoveryTargetNotSupportedException.UserMessage
+        });
+    }
+    catch (InvalidOperationException exception)
+    {
+        logger.LogWarning(exception, "Discovery target add failed validation for job {DiscoveryJobId}.", id);
+        return Results.BadRequest(new { code = "DISCOVERY_TARGET_ADD_FAILED", message = exception.Message });
+    }
+})
+.Produces(StatusCodes.Status200OK)
+.Produces(StatusCodes.Status400BadRequest)
+.Produces(StatusCodes.Status409Conflict)
 .WithName("AddDiscoveryTargets")
 .RequireAuthorization(AuthorizationPolicies.Operator);
+
+app.MapPost("/api/discoveries/{id:guid}/allowlist", async (
+    Guid id,
+    ApproveDiscoveryAllowlistRequest request,
+    IDiscoveryService discoveryService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Ok(await discoveryService.ApproveAllowlistAsync(
+            id,
+            request.ResultIds,
+            cancellationToken));
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.BadRequest(new { code = "DISCOVERY_ALLOWLIST_APPROVAL_FAILED", message = exception.Message });
+    }
+})
+.WithName("ApproveDiscoveryAllowlist")
+.RequireAuthorization(AuthorizationPolicies.Admin);
 
 app.MapPost("/api/scans", async (
     CreateScanRequest request,
@@ -599,6 +852,28 @@ static IReadOnlyCollection<DatabaseEngine> ParseDiscoveryEngines(IReadOnlyList<s
 
     return engines.Distinct().ToArray();
 }
+
+static UpsertDiscoveryAllowlistCommand ToAllowlistCommand(CreateDiscoveryAllowlistRequest request) =>
+    new(
+        request.Name,
+        request.Environment,
+        request.TargetType,
+        request.TargetValue,
+        request.AllowedEngines,
+        request.AllowedPorts,
+        request.IsActive,
+        request.Description);
+
+static UpsertDiscoveryAllowlistCommand ToUpdateAllowlistCommand(UpdateDiscoveryAllowlistRequest request) =>
+    new(
+        request.Name,
+        request.Environment,
+        request.TargetType,
+        request.TargetValue,
+        request.AllowedEngines,
+        request.AllowedPorts,
+        request.IsActive,
+        request.Description);
 
 static DatabaseAuthentication? MapCredentials(DatabaseCredentialRequest? credentials) =>
     credentials is null

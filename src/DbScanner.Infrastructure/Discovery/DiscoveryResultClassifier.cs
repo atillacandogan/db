@@ -15,17 +15,21 @@ internal sealed class DiscoveryResultClassifier : IDiscoveryResultClassifier
     {
         if (fingerprint.Engine is { } engine
             && SupportedEngines.Contains(engine)
-            && supportedEngineFilter.Contains(engine))
+            && supportedEngineFilter.Contains(engine)
+            && fingerprint.Level == DiscoveryFingerprintLevel.Confirmed)
         {
             return new DiscoveryClassification(
                 fingerprint.Service,
                 engine,
                 fingerprint.Confidence,
+                fingerprint.Level,
                 DiscoveryResultStatus.Supported,
                 "Supported database engine; it can be added as a target.");
         }
 
-        var reason = fingerprint.Engine is { } filteredEngine && SupportedEngines.Contains(filteredEngine)
+        var reason = fingerprint.Level != DiscoveryFingerprintLevel.Confirmed
+            ? $"{fingerprint.Service} was not confirmed by a database protocol fingerprint."
+            : fingerprint.Engine is { } filteredEngine && SupportedEngines.Contains(filteredEngine)
                 ? $"{fingerprint.Service} was excluded by the supported engine filter."
                 : $"{fingerprint.Service} is not supported yet.";
 
@@ -33,6 +37,7 @@ internal sealed class DiscoveryResultClassifier : IDiscoveryResultClassifier
             fingerprint.Service,
             fingerprint.Engine,
             fingerprint.Confidence,
+            fingerprint.Level,
             DiscoveryResultStatus.Unsupported,
             reason);
     }

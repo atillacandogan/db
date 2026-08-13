@@ -5,4 +5,5 @@ namespace DbScanner.Application.Models;
 public sealed record DiscoveryFingerprint(
     string Service,
     DatabaseEngine? Engine,
-    int Confidence);
+    int Confidence,
+    DiscoveryFingerprintLevel Level = DiscoveryFingerprintLevel.Probable);

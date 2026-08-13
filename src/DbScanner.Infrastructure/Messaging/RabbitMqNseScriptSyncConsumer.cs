@@ -77,7 +77,9 @@ internal sealed class RabbitMqNseScriptSyncConsumer(
                 0,
                 0,
                 0,
-                "NSE script sync failed.");
+                0,
+                0,
+                exception.Message);
         }
 
         if (!string.IsNullOrWhiteSpace(args.BasicProperties.ReplyTo))
@@ -111,5 +113,7 @@ internal sealed class RabbitMqNseScriptSyncConsumer(
             result.AddedCount,
             result.UpdatedCount,
             result.UnchangedCount,
+            result.SkippedCount,
+            result.FailedCount,
             result.UninstalledCount);
 }

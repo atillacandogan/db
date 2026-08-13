@@ -7,8 +7,12 @@ public sealed record DiscoveryResultDto(
     string DetectedService,
     string? DetectedEngine,
     int Confidence,
+    string FingerprintLevel,
     string Environment,
     string Status,
     string Reason,
     bool CanAddAsTarget,
-    Guid? TargetId);
+    Guid? TargetId,
+    bool IsAlreadyTarget,
+    Guid? ExistingTargetId,
+    string TargetState);

@@ -5,4 +5,5 @@ namespace DbScanner.Application.Ports;
 public interface IFindingCatalogService
 {
     Task<IReadOnlyList<FindingListItemDto>> ListLatestAsync(int limit = 50, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<FindingListItemDto>> ListAllAsync(CancellationToken cancellationToken = default);
 }

@@ -7,6 +7,7 @@ public sealed class Target
     public Guid Id { get; set; } = Guid.NewGuid();
     public required string Name { get; set; }
     public required string Host { get; set; }
+    public string NormalizedHost { get; set; } = string.Empty;
     public int Port { get; set; }
     public DatabaseEngine Engine { get; set; }
     public TargetConnectionMode ConnectionMode { get; set; } = TargetConnectionMode.DefaultValues;

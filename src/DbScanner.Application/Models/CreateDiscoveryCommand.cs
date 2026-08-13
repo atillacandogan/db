@@ -4,6 +4,7 @@ namespace DbScanner.Application.Models;
 
 public sealed record CreateDiscoveryCommand(
     string Name,
-    string Scope,
+    string? Scope,
     string Environment,
-    IReadOnlyCollection<DatabaseEngine> SupportedEngineFilter);
+    IReadOnlyCollection<DatabaseEngine> SupportedEngineFilter,
+    bool UseAuthorizedScope = true);

@@ -13,6 +13,28 @@ Gereksinimler:
 - Docker Desktop veya uyumlu bir Docker daemon
 - Gerçek servis keşfi için `nmap`
 
+Projeyi yeni bir bilgisayarda ilk kez çalıştırmadan önce AppHost'un yerel
+geliştirme secret'larını oluşturun. Script yalnızca eksik değerleri üretir;
+mevcut secret'ları değiştirmez ve değerleri repository'ye yazmaz.
+
+Windows PowerShell:
+
+```powershell
+.\scripts\setup-dev-secrets.ps1
+dotnet run --project src/DbScanner.AppHost/DbScanner.AppHost.csproj
+```
+
+macOS/Linux:
+
+```bash
+bash scripts/setup-dev-secrets.sh
+dotnet run --project src/DbScanner.AppHost/DbScanner.AppHost.csproj
+```
+
+Docker volume'ları veya uygulama veritabanı başka bir bilgisayardan taşındıysa
+yeni secret üretmek yerine önceki parolalar ve
+`scanner-credential-protection-key` değeri aynen aktarılmalıdır.
+
 Microsoft SQL Server demo ortamı ve target seviyesinde credential kullanan
 tek scan akışının ayrıntıları için
 [Microsoft SQL Server desteği](docs/mssql.md) belgesine bakın.

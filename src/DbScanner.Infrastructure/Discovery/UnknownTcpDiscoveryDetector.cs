@@ -9,6 +9,6 @@ internal sealed class UnknownTcpDiscoveryDetector : IDatabaseFingerprintDetector
 
     public DiscoveryFingerprint? Detect(DiscoveryProbeResult probeResult) =>
         probeResult.IsOpen
-            ? new DiscoveryFingerprint("Unknown TCP service", null, 25)
+            ? new DiscoveryFingerprint("Unknown TCP service", null, 25, DbScanner.Domain.Enums.DiscoveryFingerprintLevel.Unknown)
             : null;
 }

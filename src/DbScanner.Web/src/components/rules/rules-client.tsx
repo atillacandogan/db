@@ -322,12 +322,12 @@ export function RulesClient() {
   const syncScriptsMutation = useMutation({
     mutationFn: syncNseScripts,
     onSuccess: async (result) => {
-      setFeedback(`Sync başarılı: ${result.addedCount} eklendi, ${result.updatedCount} güncellendi, ${result.unchangedCount} değişmedi.`);
+      setFeedback(`Sync başarılı: ${result.addedCount} eklendi, ${result.updatedCount} güncellendi, ${result.unchangedCount} değişmedi, ${result.skippedCount} atlandı, ${result.failedCount} hata.`);
       setError(null);
       await queryClient.invalidateQueries({ queryKey: ["nse-scripts"] });
     },
-    onError: () => {
-      setError("NSE script sync failed.");
+    onError: (mutationError: Error) => {
+      setError(mutationError.message);
       setFeedback(null);
     },
   });
@@ -787,25 +787,26 @@ export function RulesClient() {
                           <dt>Weight</dt>
                           <dd>{rule.weight}</dd>
                         </div>
-                      </dl>
-
-                      <div className="rule-card__mapping">
-                        <span className="rule-card__mapping-label">Scripts</span>
-                        <div className="catalog-pill-list">
-                          {rule.nseScripts.length > 0 ? (
-                            rule.nseScripts.slice(0, 3).map((scriptId) => (
-                              <span key={`${rule.id}-${scriptId}`} className="catalog-pill">
-                                {scriptId}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="muted">Script mapping yok</span>
-                          )}
-                          {rule.nseScripts.length > 3 ? (
-                            <span className="catalog-pill catalog-pill--muted">+{rule.nseScripts.length - 3}</span>
-                          ) : null}
+                        <div className="rule-card__scripts">
+                          <dt>Scripts</dt>
+                          <dd>
+                            <div className="catalog-pill-list">
+                              {rule.nseScripts.length > 0 ? (
+                                rule.nseScripts.slice(0, 3).map((scriptId) => (
+                                  <span key={`${rule.id}-${scriptId}`} className="catalog-pill">
+                                    {scriptId}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="muted">Script mapping yok</span>
+                              )}
+                              {rule.nseScripts.length > 3 ? (
+                                <span className="catalog-pill catalog-pill--muted">+{rule.nseScripts.length - 3}</span>
+                              ) : null}
+                            </div>
+                          </dd>
                         </div>
-                      </div>
+                      </dl>
 
                       <div className="rule-card__footer">
                         <span className={`rule-card__status${rule.enabled ? " rule-card__status--enabled" : ""}`}>

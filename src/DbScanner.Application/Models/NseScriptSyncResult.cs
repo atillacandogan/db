@@ -6,4 +6,6 @@ public sealed record NseScriptSyncResult(
     int AddedCount,
     int UpdatedCount,
     int UnchangedCount,
+    int SkippedCount,
+    int FailedCount,
     int UninstalledCount);

@@ -8,7 +8,7 @@ internal sealed class RedisDiscoveryDetector : IDatabaseFingerprintDetector
     public int Order => 60;
 
     public DiscoveryFingerprint? Detect(DiscoveryProbeResult probeResult) =>
-        probeResult.Port == 6379
-            ? new DiscoveryFingerprint("Redis", null, 65)
+        probeResult.ProtocolEvidence is null && probeResult.Port == 6379
+            ? new DiscoveryFingerprint("Redis", null, 30, DbScanner.Domain.Enums.DiscoveryFingerprintLevel.PortHint)
             : null;
 }

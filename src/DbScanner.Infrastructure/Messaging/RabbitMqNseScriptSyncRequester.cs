@@ -105,6 +105,8 @@ internal sealed class RabbitMqNseScriptSyncRequester(
             response.AddedCount,
             response.UpdatedCount,
             response.UnchangedCount,
+            response.SkippedCount,
+            response.FailedCount,
             response.UninstalledCount);
     }
 }

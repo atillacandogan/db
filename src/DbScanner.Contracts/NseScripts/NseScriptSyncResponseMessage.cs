@@ -7,5 +7,7 @@ public sealed record NseScriptSyncResponseMessage(
     int AddedCount,
     int UpdatedCount,
     int UnchangedCount,
+    int SkippedCount,
+    int FailedCount,
     int UninstalledCount,
     string? Error = null);

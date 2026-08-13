@@ -46,7 +46,22 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("DiscoveryJobId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("EnvironmentTag")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("FingerprintLevel")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
                     b.Property<string>("Host")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NormalizedHost")
                         .IsRequired()
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
@@ -69,9 +84,11 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("DiscoveryJobId");
+
                     b.HasIndex("TargetId");
 
-                    b.HasIndex("DiscoveryJobId", "Host", "Port")
+                    b.HasIndex("NormalizedHost", "Port", "DetectedEngine", "EnvironmentTag")
                         .IsUnique();
 
                     b.ToTable("discovered_databases", (string)null);
@@ -684,6 +701,16 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("AllowedEngines")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("AllowedPorts")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -693,6 +720,16 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
 
                     b.Property<bool>("Enabled")
                         .HasColumnType("boolean");
+
+                    b.Property<string>("EnvironmentTag")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)");
 
                     b.Property<int?>("Port")
                         .HasColumnType("integer");
@@ -707,9 +744,12 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
 
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.HasKey("Id");
 
-                    b.HasIndex("ScopeValue", "Port")
+                    b.HasIndex("EnvironmentTag", "ScopeType", "ScopeValue")
                         .IsUnique();
 
                     b.ToTable("scan_scope_allowlist", (string)null);
@@ -718,22 +758,32 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                         new
                         {
                             Id = new Guid("25585dc7-f312-44ba-b01d-ef31cc312d10"),
+                            AllowedEngines = "postgresql",
+                            AllowedPorts = "postgresql:5432",
                             CreatedAt = new DateTimeOffset(new DateTime(2026, 4, 13, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
                             Description = "Aspire demo PostgreSQL target",
                             Enabled = true,
+                            EnvironmentTag = "demo",
+                            Name = "Demo PostgreSQL discovery scope",
                             Port = 5432,
                             ScopeType = "DemoTarget",
-                            ScopeValue = "demo-postgres-target"
+                            ScopeValue = "demo-postgres-target",
+                            UpdatedAt = new DateTimeOffset(new DateTime(2026, 4, 13, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0))
                         },
                         new
                         {
                             Id = new Guid("aa02f7f9-7a0e-4609-9e85-53b1bda8b1e3"),
+                            AllowedEngines = "mysql",
+                            AllowedPorts = "mysql:3306",
                             CreatedAt = new DateTimeOffset(new DateTime(2026, 4, 13, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
                             Description = "Aspire demo MySQL target",
                             Enabled = true,
+                            EnvironmentTag = "demo",
+                            Name = "Demo MySQL discovery scope",
                             Port = 3306,
                             ScopeType = "DemoTarget",
-                            ScopeValue = "demo-mysql-target"
+                            ScopeValue = "demo-mysql-target",
+                            UpdatedAt = new DateTimeOffset(new DateTime(2026, 4, 13, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0))
                         });
                 });
 
@@ -816,6 +866,11 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                         .HasMaxLength(160)
                         .HasColumnType("character varying(160)");
 
+                    b.Property<string>("NormalizedHost")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
                     b.Property<int>("Port")
                         .HasColumnType("integer");
 
@@ -825,7 +880,7 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Host", "Port", "Engine")
+                    b.HasIndex("NormalizedHost", "Port", "Engine")
                         .IsUnique();
 
                     b.ToTable("targets", (string)null);
@@ -841,6 +896,7 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                             EnvironmentTag = "demo",
                             Host = "demo-postgres-target",
                             Name = "Demo PostgreSQL",
+                            NormalizedHost = "demo-postgres-target",
                             Port = 5432
                         },
                         new
@@ -853,6 +909,7 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                             EnvironmentTag = "demo",
                             Host = "demo-mysql-target",
                             Name = "Demo MySQL",
+                            NormalizedHost = "demo-mysql-target",
                             Port = 3306
                         });
                 });

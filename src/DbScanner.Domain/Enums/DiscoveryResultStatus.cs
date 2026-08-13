@@ -4,5 +4,6 @@ public enum DiscoveryResultStatus
 {
     Supported = 1,
     Unsupported = 2,
-    AddedAsTarget = 3
+    AddedAsTarget = 3,
+    AlreadyDiscovered = 4
 }

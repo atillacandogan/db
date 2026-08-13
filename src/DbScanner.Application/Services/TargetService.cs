@@ -1,8 +1,10 @@
+using DbScanner.Application.Exceptions;
 using DbScanner.Application.Models;
 using DbScanner.Application.Ports;
 using DbScanner.Contracts.Targets;
 using DbScanner.Domain.Entities;
 using DbScanner.Domain.Enums;
+using DbScanner.Domain.Services;
 
 namespace DbScanner.Application.Services;
 
@@ -46,27 +48,33 @@ public sealed class TargetService(
             throw new InvalidOperationException("Target port must be between 1 and 65535.");
         }
 
-        var isAllowed = await scanScopeRepository.IsAllowedAsync(host, port, cancellationToken);
+        var isAllowed = await scanScopeRepository.IsAllowedAsync(
+            host,
+            port,
+            environmentTag!,
+            command.Engine,
+            cancellationToken);
         if (!isAllowed)
         {
             throw new InvalidOperationException("Target is outside the approved scan scope.");
         }
 
-        var existingTargets = await targetRepository.ListAsync(cancellationToken);
-        var duplicateExists = existingTargets.Any(target =>
-            target.Host.Equals(host, StringComparison.OrdinalIgnoreCase)
-            && target.Port == port
-            && target.Engine == command.Engine);
-
-        if (duplicateExists)
+        var normalizedHost = TargetEndpointNormalizer.NormalizeHost(host);
+        var existingTarget = await targetRepository.FindByEndpointAsync(
+            normalizedHost,
+            port,
+            command.Engine,
+            cancellationToken: cancellationToken);
+        if (existingTarget is not null)
         {
-            throw new InvalidOperationException("A target with the same host, port and engine already exists.");
+            throw new TargetAlreadyExistsException(existingTarget.Id);
         }
 
         var target = new Target
         {
             Name = name,
             Host = host,
+            NormalizedHost = normalizedHost,
             Port = port,
             Engine = command.Engine,
             ConnectionMode = command.ConnectionMode,
@@ -99,24 +107,32 @@ public sealed class TargetService(
         var environmentTag = command.EnvironmentTag?.Trim();
         ValidateTargetValues(name, host, command.Port, environmentTag);
 
-        if (!await scanScopeRepository.IsAllowedAsync(host, command.Port, cancellationToken))
+        if (!await scanScopeRepository.IsAllowedAsync(
+            host,
+            command.Port,
+            environmentTag!,
+            command.Engine,
+            cancellationToken))
         {
             throw new InvalidOperationException("Target is outside the approved scan scope.");
         }
 
-        var duplicateExists = (await targetRepository.ListAsync(cancellationToken)).Any(candidate =>
-            candidate.Id != targetId
-            && candidate.Host.Equals(host, StringComparison.OrdinalIgnoreCase)
-            && candidate.Port == command.Port
-            && candidate.Engine == command.Engine);
-        if (duplicateExists)
+        var normalizedHost = TargetEndpointNormalizer.NormalizeHost(host);
+        var duplicateTarget = await targetRepository.FindByEndpointAsync(
+            normalizedHost,
+            command.Port,
+            command.Engine,
+            targetId,
+            cancellationToken);
+        if (duplicateTarget is not null)
         {
-            throw new InvalidOperationException("A target with the same host, port and engine already exists.");
+            throw new TargetAlreadyExistsException(duplicateTarget.Id);
         }
 
         var engineChanged = target.Engine != command.Engine;
         target.Name = name;
         target.Host = host;
+        target.NormalizedHost = normalizedHost;
         target.Port = command.Port;
         target.Engine = command.Engine;
         target.EnvironmentTag = environmentTag;

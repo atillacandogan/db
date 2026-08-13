@@ -8,6 +8,7 @@ using DbScanner.Infrastructure.Discovery;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace DbScanner.Infrastructure;
 
@@ -81,20 +82,26 @@ public static class DependencyInjection
             options.Key = protectionSection[nameof(CredentialProtectionOptions.Key)];
             options.KeyFile = protectionSection[nameof(CredentialProtectionOptions.KeyFile)];
         });
-        services.Configure<DiscoveryOptions>(options =>
-        {
-            var section = configuration.GetSection(DiscoveryOptions.SectionName);
-            if (int.TryParse(section[nameof(DiscoveryOptions.ConnectTimeoutMilliseconds)], out var connectTimeout))
-                options.ConnectTimeoutMilliseconds = Math.Clamp(connectTimeout, 100, 5000);
-            if (int.TryParse(section[nameof(DiscoveryOptions.BannerReadTimeoutMilliseconds)], out var readTimeout))
-                options.BannerReadTimeoutMilliseconds = Math.Clamp(readTimeout, 50, 1000);
-            if (int.TryParse(section[nameof(DiscoveryOptions.MaxConcurrency)], out var concurrency))
-                options.MaxConcurrency = Math.Clamp(concurrency, 1, 32);
-            if (int.TryParse(section[nameof(DiscoveryOptions.MaxProbesPerSecond)], out var rate))
-                options.MaxProbesPerSecond = Math.Clamp(rate, 1, 100);
-            if (int.TryParse(section[nameof(DiscoveryOptions.MaxHosts)], out var maxHosts))
-                options.MaxHosts = Math.Clamp(maxHosts, 1, 256);
-        });
+        var discoverySection = configuration.GetSection(DiscoveryOptions.SectionName);
+        services.AddOptions<DiscoveryOptions>()
+            .Configure(options =>
+            {
+                // ConfigurationBinder appends configured arrays to arrays already present in a
+                // dictionary initializer. Clear only this configured collection so JSON/env values
+                // replace the safe defaults instead of producing duplicate ports.
+                if (discoverySection.GetSection(nameof(DiscoveryOptions.LocalNetworkPorts)).GetChildren().Any())
+                {
+                    options.LocalNetworkPorts = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
+                }
+
+                if (discoverySection.GetSection(nameof(DiscoveryOptions.UnsupportedDatabasePorts)).GetChildren().Any())
+                {
+                    options.UnsupportedDatabasePorts = [];
+                }
+            })
+            .Bind(discoverySection)
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<DiscoveryOptions>, DiscoveryOptionsValidator>();
         services.AddSingleton<RabbitMqConnectionFactory>();
         services.AddScoped<IScanJobPublisher, RabbitMqScanJobPublisher>();
         services.AddSingleton<IScanJobConsumer, RabbitMqScanJobConsumer>();
@@ -114,6 +121,9 @@ public static class DependencyInjection
         services.AddSingleton<ITargetConnectionStringParser, TargetConnectionStringParser>();
         services.AddScoped<INseScriptSyncService, InstalledNseScriptSyncService>();
         services.AddSingleton<IDiscoveryProbe, TcpDiscoveryProbe>();
+        services.AddSingleton<IDiscoveryDnsResolver, DiscoveryDnsResolver>();
+        services.AddSingleton<ILocalNetworkProvider, LocalNetworkProvider>();
+        services.AddSingleton<IDiscoveryConfiguration, DiscoveryConfiguration>();
         services.AddSingleton<IDatabaseFingerprintDetector, MySqlDiscoveryDetector>();
         services.AddSingleton<IDatabaseFingerprintDetector, PostgreSqlDiscoveryDetector>();
         services.AddSingleton<IDatabaseFingerprintDetector, MsSqlDiscoveryDetector>();

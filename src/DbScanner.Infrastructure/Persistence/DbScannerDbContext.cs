@@ -40,11 +40,12 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
             entity.HasKey(target => target.Id);
             entity.Property(target => target.Name).HasMaxLength(160).IsRequired();
             entity.Property(target => target.Host).HasMaxLength(255).IsRequired();
+            entity.Property(target => target.NormalizedHost).HasMaxLength(255).IsRequired();
             entity.Property(target => target.Engine).HasConversion<string>().HasMaxLength(32).IsRequired();
             entity.Property(target => target.ConnectionMode).HasConversion<string>().HasMaxLength(32).IsRequired();
             entity.Property(target => target.EnvironmentTag).HasMaxLength(64);
             entity.Property(target => target.ProtectedCredentials).HasMaxLength(4096);
-            entity.HasIndex(target => new { target.Host, target.Port, target.Engine }).IsUnique();
+            entity.HasIndex(target => new { target.NormalizedHost, target.Port, target.Engine }).IsUnique();
         });
     }
 
@@ -214,10 +215,14 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
         {
             entity.ToTable("scan_scope_allowlist");
             entity.HasKey(scope => scope.Id);
+            entity.Property(scope => scope.Name).HasMaxLength(160).IsRequired();
+            entity.Property(scope => scope.EnvironmentTag).HasMaxLength(64).IsRequired();
             entity.Property(scope => scope.ScopeValue).HasMaxLength(255).IsRequired();
             entity.Property(scope => scope.ScopeType).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(scope => scope.AllowedEngines).HasMaxLength(128).IsRequired();
+            entity.Property(scope => scope.AllowedPorts).HasMaxLength(1024).IsRequired();
             entity.Property(scope => scope.Description).HasMaxLength(512);
-            entity.HasIndex(scope => new { scope.ScopeValue, scope.Port }).IsUnique();
+            entity.HasIndex(scope => new { scope.EnvironmentTag, scope.ScopeType, scope.ScopeValue }).IsUnique();
         });
     }
 
@@ -241,11 +246,20 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
             entity.ToTable("discovered_databases");
             entity.HasKey(result => result.Id);
             entity.Property(result => result.Host).HasMaxLength(255).IsRequired();
+            entity.Property(result => result.NormalizedHost).HasMaxLength(255).IsRequired();
+            entity.Property(result => result.EnvironmentTag).HasMaxLength(64).IsRequired();
             entity.Property(result => result.DetectedService).HasMaxLength(128).IsRequired();
             entity.Property(result => result.DetectedEngine).HasConversion<string>().HasMaxLength(32);
+            entity.Property(result => result.FingerprintLevel).HasConversion<string>().HasMaxLength(32).IsRequired();
             entity.Property(result => result.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
             entity.Property(result => result.Reason).HasMaxLength(512).IsRequired();
-            entity.HasIndex(result => new { result.DiscoveryJobId, result.Host, result.Port }).IsUnique();
+            entity.HasIndex(result => new
+            {
+                result.NormalizedHost,
+                result.Port,
+                result.DetectedEngine,
+                result.EnvironmentTag
+            }).IsUnique();
             entity.HasOne(result => result.DiscoveryJob)
                 .WithMany(job => job.Results)
                 .HasForeignKey(result => result.DiscoveryJobId)
@@ -269,6 +283,7 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
                 Id = demoPostgresTargetId,
                 Name = "Demo PostgreSQL",
                 Host = "demo-postgres-target",
+                NormalizedHost = "demo-postgres-target",
                 Port = 5432,
                 Engine = DatabaseEngine.PostgreSql,
                 EnvironmentTag = "demo",
@@ -280,6 +295,7 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
                 Id = demoMySqlTargetId,
                 Name = "Demo MySQL",
                 Host = "demo-mysql-target",
+                NormalizedHost = "demo-mysql-target",
                 Port = 3306,
                 Engine = DatabaseEngine.MySql,
                 EnvironmentTag = "demo",
@@ -291,22 +307,32 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
             new ScanScopeAllowlist
             {
                 Id = Guid.Parse("25585dc7-f312-44ba-b01d-ef31cc312d10"),
+                Name = "Demo PostgreSQL discovery scope",
+                EnvironmentTag = "demo",
                 ScopeValue = "demo-postgres-target",
                 ScopeType = ScanScopeType.DemoTarget,
+                AllowedEngines = "postgresql",
+                AllowedPorts = "postgresql:5432",
                 Port = 5432,
                 Description = "Aspire demo PostgreSQL target",
                 Enabled = true,
-                CreatedAt = createdAt
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt
             },
             new ScanScopeAllowlist
             {
                 Id = Guid.Parse("aa02f7f9-7a0e-4609-9e85-53b1bda8b1e3"),
+                Name = "Demo MySQL discovery scope",
+                EnvironmentTag = "demo",
                 ScopeValue = "demo-mysql-target",
                 ScopeType = ScanScopeType.DemoTarget,
+                AllowedEngines = "mysql",
+                AllowedPorts = "mysql:3306",
                 Port = 3306,
                 Description = "Aspire demo MySQL target",
                 Enabled = true,
-                CreatedAt = createdAt
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt
             });
 
         modelBuilder.Entity<NseScript>().HasData(

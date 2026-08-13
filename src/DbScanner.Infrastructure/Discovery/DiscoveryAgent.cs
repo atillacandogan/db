@@ -5,6 +5,7 @@ using DbScanner.Domain.Entities;
 using DbScanner.Domain.Enums;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using DbScanner.Domain.Services;
 
 namespace DbScanner.Infrastructure.Discovery;
 
@@ -27,23 +28,44 @@ internal sealed class DiscoveryAgent(
 
         try
         {
+            using var jobTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            jobTimeout.CancelAfter(TimeSpan.FromSeconds(options.Value.JobTimeoutSeconds));
+            var executionToken = jobTimeout.Token;
             var job = await discoveryRepository.GetByIdAsync(discoveryJobId, cancellationToken)
                 ?? throw new InvalidOperationException("Discovery job was not found.");
             var engineFilter = ParseEngineFilter(job.SupportedEngineFilter);
 
             // Defense in depth: scope is validated again in the worker immediately before probing.
-            var endpoints = await scopeValidator.ValidateAndPlanAsync(job.ScopeInput, engineFilter, cancellationToken);
+            IReadOnlyList<DiscoveryEndpoint> endpoints;
+            if (DiscoveryScopeSelection.TryGetLocalNetworks(job.ScopeInput, out var localNetworks))
+            {
+                endpoints = await scopeValidator.PlanLocalNetworksAsync(localNetworks, engineFilter, executionToken);
+            }
+            else if (DiscoveryScopeSelection.IsAllAuthorized(job.ScopeInput))
+            {
+                endpoints = await scopeValidator.PlanAuthorizedAsync(job.EnvironmentTag, engineFilter, executionToken);
+            }
+            else
+            {
+                endpoints = await scopeValidator.ValidateAndPlanAsync(
+                    job.ScopeInput,
+                    job.EnvironmentTag,
+                    engineFilter,
+                    executionToken);
+            }
             var results = new ConcurrentBag<DiscoveredDatabase>();
             var orderedDetectors = detectors.OrderBy(detector => detector.Order).ToArray();
             using var rateGate = new SemaphoreSlim(1, 1);
             var nextProbeAt = DateTimeOffset.UtcNow;
-            var interval = TimeSpan.FromMilliseconds(1000d / Math.Max(1, options.Value.MaxProbesPerSecond));
+            var interval = TimeSpan.FromMilliseconds(Math.Max(
+                options.Value.ProbeDelayMilliseconds,
+                1000d / Math.Max(1, options.Value.MaxProbesPerSecond)));
 
             await Parallel.ForEachAsync(
                 endpoints,
                 new ParallelOptions
                 {
-                    CancellationToken = cancellationToken,
+                    CancellationToken = executionToken,
                     MaxDegreeOfParallelism = Math.Max(1, options.Value.MaxConcurrency)
                 },
                 async (endpoint, token) =>
@@ -68,20 +90,36 @@ internal sealed class DiscoveryAgent(
                     {
                         DiscoveryJobId = discoveryJobId,
                         Host = endpoint.Host,
+                        NormalizedHost = TargetEndpointNormalizer.NormalizeHost(endpoint.Host),
+                        EnvironmentTag = job.EnvironmentTag,
                         Port = endpoint.Port,
                         DetectedService = classification.Service,
                         DetectedEngine = classification.Engine,
                         Confidence = classification.Confidence,
+                        FingerprintLevel = classification.FingerprintLevel,
                         Status = classification.Status,
                         Reason = classification.Reason
                     });
                 });
 
-            await discoveryRepository.CompleteAsync(discoveryJobId, results.ToArray(), cancellationToken);
+            var deduplicatedResults = results
+                .GroupBy(result => new
+                {
+                    result.NormalizedHost,
+                    result.Port,
+                    result.DetectedEngine,
+                    result.EnvironmentTag
+                })
+                .Select(group => group
+                    .OrderByDescending(result => result.FingerprintLevel)
+                    .ThenByDescending(result => result.Confidence)
+                    .First())
+                .ToArray();
+            await discoveryRepository.CompleteAsync(discoveryJobId, deduplicatedResults, executionToken);
             logger.LogInformation(
                 "Discovery job {DiscoveryJobId} completed. Open database services: {ResultCount}.",
                 discoveryJobId,
-                results.Count);
+                deduplicatedResults.Length);
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {

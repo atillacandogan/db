@@ -1,3 +1,3 @@
 namespace DbScanner.Api.Contracts;
 
-public sealed record AddDiscoveryTargetsRequest(IReadOnlyList<Guid> ResultIds);
+public sealed record AddDiscoveryTargetsRequest(IReadOnlyList<Guid> ResultIds, bool IsBulk = false);

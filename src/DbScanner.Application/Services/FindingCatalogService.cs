@@ -13,6 +13,12 @@ public sealed class FindingCatalogService(IFindingRepository findingRepository) 
         return findings.Select(MapFinding).ToArray();
     }
 
+    public async Task<IReadOnlyList<FindingListItemDto>> ListAllAsync(CancellationToken cancellationToken = default)
+    {
+        var findings = await findingRepository.ListAllAsync(cancellationToken);
+        return findings.Select(MapFinding).ToArray();
+    }
+
     private static FindingListItemDto MapFinding(Finding finding) =>
         new(
             finding.Id,

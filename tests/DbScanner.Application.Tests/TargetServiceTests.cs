@@ -1,8 +1,10 @@
+using DbScanner.Application.Exceptions;
 using DbScanner.Application.Models;
 using DbScanner.Application.Ports;
 using DbScanner.Application.Services;
 using DbScanner.Domain.Entities;
 using DbScanner.Domain.Enums;
+using DbScanner.Domain.Services;
 using Xunit;
 
 namespace DbScanner.Application.Tests;
@@ -40,9 +42,42 @@ public sealed class TargetServiceTests
 
         var command = new CreateTargetCommand("Demo", "demo-postgres-target", 5432, DatabaseEngine.PostgreSql, "demo", true);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateAsync(command));
+        var exception = await Assert.ThrowsAsync<TargetAlreadyExistsException>(() => service.CreateAsync(command));
 
-        Assert.Equal("A target with the same host, port and engine already exists.", exception.Message);
+        Assert.Equal(TargetAlreadyExistsException.UserMessage, exception.Message);
+        Assert.NotNull(exception.ExistingTargetId);
+    }
+
+    [Fact]
+    public async Task CreateAsync_NormalizesHostBeforeDuplicateCheck()
+    {
+        var existing = new Target
+        {
+            Name = "Existing",
+            Host = "DB.EXAMPLE.TEST",
+            NormalizedHost = "db.example.test",
+            Port = 5432,
+            Engine = DatabaseEngine.PostgreSql
+        };
+        var repository = new InMemoryTargetRepository(existing);
+        var service = new TargetService(
+            repository,
+            new StubScanRepository(),
+            new StubScanScopeRepository(isAllowed: true),
+            new StubConnectionStringParser(),
+            new StubCredentialProtector());
+
+        var exception = await Assert.ThrowsAsync<TargetAlreadyExistsException>(() => service.CreateAsync(
+            new CreateTargetCommand(
+                "Duplicate",
+                " db.example.test. ",
+                5432,
+                DatabaseEngine.PostgreSql,
+                "another-environment",
+                true)));
+
+        Assert.Equal(existing.Id, exception.ExistingTargetId);
+        Assert.Single(repository.Items);
     }
 
     [Fact]
@@ -245,6 +280,18 @@ public sealed class TargetServiceTests
         public Task<Target?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             Task.FromResult(Items.FirstOrDefault(item => item.Id == id));
 
+        public Task<Target?> FindByEndpointAsync(
+            string normalizedHost,
+            int port,
+            DatabaseEngine engine,
+            Guid? excludeTargetId = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(Items.FirstOrDefault(item =>
+                item.Id != excludeTargetId
+                && TargetEndpointNormalizer.NormalizeHost(item.Host) == normalizedHost
+                && item.Port == port
+                && item.Engine == engine));
+
         public Task AddAsync(Target target, CancellationToken cancellationToken = default)
         {
             Items.Add(target);
@@ -265,7 +312,13 @@ public sealed class TargetServiceTests
         public Task<IReadOnlyList<ScanScopeAllowlist>> ListEnabledAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<ScanScopeAllowlist>>(Array.Empty<ScanScopeAllowlist>());
 
-        public Task<bool> IsAllowedAsync(string host, int port, CancellationToken cancellationToken = default) =>
+        public Task<IReadOnlyList<ScanScopeAllowlist>> ListAsync(string? environment = null, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ScanScopeAllowlist>>([]);
+        public Task<ScanScopeAllowlist?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<ScanScopeAllowlist?>(null);
+        public Task AddAsync(ScanScopeAllowlist entry, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteAsync(ScanScopeAllowlist entry, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<bool> IsAllowedAsync(string host, int port, string environment, DatabaseEngine engine, CancellationToken cancellationToken = default) =>
             Task.FromResult(isAllowed);
     }
 

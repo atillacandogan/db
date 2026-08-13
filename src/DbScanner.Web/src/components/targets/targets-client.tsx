@@ -168,6 +168,19 @@ export function TargetsClient() {
     return () => window.clearTimeout(timeoutId);
   }, [error, feedback]);
 
+  useEffect(() => {
+    if (!targetsQuery.isSuccess || !window.location.hash.startsWith("#target-")) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      document.getElementById(window.location.hash.slice(1))?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    });
+  }, [targetsQuery.data, targetsQuery.isSuccess]);
+
   const createTargetMutation = useMutation({
     mutationFn: createTarget,
     onSuccess: async () => {
@@ -485,7 +498,7 @@ export function TargetsClient() {
 
       </section>
 
-      <section className="placeholder">
+      <section id="registered-targets" className="placeholder">
         <div className="targets-section-heading">
           <div>
             <p className="detail-label">Kayitli Targetlar</p>
@@ -530,7 +543,7 @@ export function TargetsClient() {
                 && createScanMutation.variables?.targetId === target.id;
 
               return (
-                <article key={target.id} className="target-card">
+                <article id={`target-${target.id}`} key={target.id} className="target-card">
                   <div className="target-card__main">
                     <div className="target-card__info target-card__cell">
                       <span className="target-card__cell-label">Target Info</span>

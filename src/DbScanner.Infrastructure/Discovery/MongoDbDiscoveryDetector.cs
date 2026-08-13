@@ -8,7 +8,7 @@ internal sealed class MongoDbDiscoveryDetector : IDatabaseFingerprintDetector
     public int Order => 50;
 
     public DiscoveryFingerprint? Detect(DiscoveryProbeResult probeResult) =>
-        probeResult.Port == 27017
-            ? new DiscoveryFingerprint("MongoDB", null, 65)
+        probeResult.ProtocolEvidence is null && probeResult.Port == 27017
+            ? new DiscoveryFingerprint("MongoDB", null, 30, DbScanner.Domain.Enums.DiscoveryFingerprintLevel.PortHint)
             : null;
 }

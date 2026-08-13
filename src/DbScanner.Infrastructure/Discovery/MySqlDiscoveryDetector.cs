@@ -10,15 +10,26 @@ internal sealed class MySqlDiscoveryDetector : IDatabaseFingerprintDetector
 
     public DiscoveryFingerprint? Detect(DiscoveryProbeResult probeResult)
     {
-        if (probeResult.Port != 3306)
+        if (probeResult.ProtocolEvidence == TcpDiscoveryProbe.MySqlHandshakeEvidence)
+        {
+            return new DiscoveryFingerprint(
+                "MySQL",
+                DatabaseEngine.MySql,
+                95,
+                DiscoveryFingerprintLevel.Confirmed);
+        }
+
+        if (probeResult.ProtocolEvidence is not null
+            || probeResult.ExpectedEngine != DatabaseEngine.MySql
+                && (probeResult.ExpectedEngine is not null || probeResult.Port != 3306))
         {
             return null;
         }
 
-        var banner = DiscoveryDetectorText.Banner(probeResult.Banner);
-        var hasProtocolFingerprint = banner.Contains("mysql", StringComparison.OrdinalIgnoreCase)
-            || banner.Contains("mariadb", StringComparison.OrdinalIgnoreCase)
-            || probeResult.Banner.Length > 5 && probeResult.Banner[4] == 10;
-        return new DiscoveryFingerprint("MySQL", DatabaseEngine.MySql, hasProtocolFingerprint ? 95 : 65);
+        return new DiscoveryFingerprint(
+            "Unconfirmed service on a MySQL-associated port",
+            null,
+            30,
+            DiscoveryFingerprintLevel.PortHint);
     }
 }

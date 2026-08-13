@@ -31,6 +31,11 @@ public sealed class InstalledNseScriptSyncService(
                 .EnumerateFiles(scriptDirectory, "*.nse", SearchOption.TopDirectoryOnly)
                 .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            if (files.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"No NSE scripts were found in {scriptDirectory}; existing installed records were preserved.");
+            }
 
             var allScripts = await nseScriptRepository.ListAsync(cancellationToken);
             var manualScripts = allScripts
@@ -44,6 +49,8 @@ public sealed class InstalledNseScriptSyncService(
             var addedCount = 0;
             var updatedCount = 0;
             var unchangedCount = 0;
+            var skippedCount = 0;
+            var failedCount = 0;
             var uninstalledCount = 0;
 
             foreach (var file in files)
@@ -54,11 +61,18 @@ public sealed class InstalledNseScriptSyncService(
                 if (string.IsNullOrWhiteSpace(scriptName) || !IsValidScriptName(scriptName))
                 {
                     logger.LogWarning("Skipped NSE script with an invalid file name: {ScriptFile}", file);
+                    skippedCount++;
                     continue;
                 }
 
                 var installedScript = installedByName.GetValueOrDefault(scriptName)
                     ?? installedById.GetValueOrDefault(scriptName);
+                if (installedScript is not null)
+                {
+                    // The source file exists even when its metadata cannot be parsed. Do not
+                    // mark an existing record as uninstalled because one file is malformed.
+                    discoveredInstalledIds.Add(installedScript.Id);
+                }
 
                 if (installedScript is null && manualScripts.Any(script =>
                         string.Equals(script.Id, scriptName, StringComparison.OrdinalIgnoreCase)
@@ -67,63 +81,77 @@ public sealed class InstalledNseScriptSyncService(
                     logger.LogWarning(
                         "Installed NSE script {ScriptName} was not imported because a manual record uses the same id or script name.",
                         scriptName);
-                    unchangedCount++;
+                    skippedCount++;
                     continue;
                 }
 
-                var metadata = ReadMetadata(file, scriptName);
-                var supportedEngines = InferSupportedEngines(scriptName);
-
-                if (installedScript is not null)
+                try
                 {
-                    discoveredInstalledIds.Add(installedScript.Id);
-                    if (ApplyInstalledMetadata(installedScript, scriptName, metadata, supportedEngines))
+                    var metadata = ReadMetadata(file, scriptName);
+                    var supportedEngines = InferSupportedEngines(scriptName);
+
+                    if (installedScript is not null)
                     {
-                        updatedCount++;
-                    }
-                    else
-                    {
-                        unchangedCount++;
+                        if (ApplyInstalledMetadata(installedScript, scriptName, metadata, supportedEngines))
+                        {
+                            updatedCount++;
+                        }
+                        else
+                        {
+                            unchangedCount++;
+                        }
+
+                        continue;
                     }
 
-                    continue;
+                    var script = new NseScript
+                    {
+                        Id = scriptName,
+                        NseScriptName = scriptName,
+                        DisplayName = ToDisplayName(scriptName),
+                        Description = metadata.Description,
+                        SupportedEngines = string.Join(",", supportedEngines),
+                        Categories = JoinCategories(metadata.Categories),
+                        DefaultEnabled = false,
+                        RequiresCredentials = RequiresCredentials(metadata.Categories),
+                        IsIntrusive = IsIntrusive(metadata.Categories),
+                        ParserType = ParserType.GenericOutput,
+                        MatcherType = MatcherType.Contains,
+                        MatcherExpression = scriptName,
+                        Severity = Severity.Info,
+                        Weight = 0,
+                        ApprovalStatus = ScriptApprovalStatus.Draft,
+                        Source = NseScriptSource.Installed,
+                        IsInstalled = true
+                    };
+
+                    script.Matchers.Add(new NseScriptMatcher
+                    {
+                        NseScriptId = script.Id,
+                        MatcherExpression = script.MatcherExpression,
+                        MatcherType = script.MatcherType,
+                        ParserType = script.ParserType,
+                        Engine = ParsePrimaryEngine(supportedEngines)
+                    });
+
+                    await nseScriptRepository.AddAsync(script, cancellationToken);
+                    installedById.Add(script.Id, script);
+                    installedByName.Add(script.NseScriptName, script);
+                    discoveredInstalledIds.Add(script.Id);
+                    addedCount++;
                 }
-
-                var script = new NseScript
+                catch (Exception exception) when (
+                    exception is IOException
+                        or UnauthorizedAccessException
+                        or RegexMatchTimeoutException)
                 {
-                    Id = scriptName,
-                    NseScriptName = scriptName,
-                    DisplayName = ToDisplayName(scriptName),
-                    Description = metadata.Description,
-                    SupportedEngines = string.Join(",", supportedEngines),
-                    Categories = JoinCategories(metadata.Categories),
-                    DefaultEnabled = false,
-                    RequiresCredentials = RequiresCredentials(metadata.Categories),
-                    IsIntrusive = IsIntrusive(metadata.Categories),
-                    ParserType = ParserType.GenericOutput,
-                    MatcherType = MatcherType.Contains,
-                    MatcherExpression = scriptName,
-                    Severity = Severity.Info,
-                    Weight = 0,
-                    ApprovalStatus = ScriptApprovalStatus.Draft,
-                    Source = NseScriptSource.Installed,
-                    IsInstalled = true
-                };
-
-                script.Matchers.Add(new NseScriptMatcher
-                {
-                    NseScriptId = script.Id,
-                    MatcherExpression = script.MatcherExpression,
-                    MatcherType = script.MatcherType,
-                    ParserType = script.ParserType,
-                    Engine = ParsePrimaryEngine(supportedEngines)
-                });
-
-                await nseScriptRepository.AddAsync(script, cancellationToken);
-                installedById.Add(script.Id, script);
-                installedByName.Add(script.NseScriptName, script);
-                discoveredInstalledIds.Add(script.Id);
-                addedCount++;
+                    failedCount++;
+                    logger.LogError(
+                        exception,
+                        "Failed to parse NSE script {ScriptName} from {ScriptFile}; synchronization will continue.",
+                        scriptName,
+                        file);
+                }
             }
 
             foreach (var script in installedScripts.Where(script => !discoveredInstalledIds.Contains(script.Id)))
@@ -142,12 +170,14 @@ public sealed class InstalledNseScriptSyncService(
             }
 
             logger.LogInformation(
-                "NSE script sync completed. Directory: {ScriptDirectory}, discovered: {DiscoveredCount}, added: {AddedCount}, updated: {UpdatedCount}, unchanged: {UnchangedCount}, uninstalled: {UninstalledCount}",
+                "NSE script sync completed. Directory: {ScriptDirectory}, discovered: {DiscoveredCount}, added: {AddedCount}, updated: {UpdatedCount}, unchanged: {UnchangedCount}, skipped: {SkippedCount}, failed: {FailedCount}, uninstalled: {UninstalledCount}",
                 scriptDirectory,
                 files.Length,
                 addedCount,
                 updatedCount,
                 unchangedCount,
+                skippedCount,
+                failedCount,
                 uninstalledCount);
 
             return new NseScriptSyncResult(
@@ -156,6 +186,8 @@ public sealed class InstalledNseScriptSyncService(
                 addedCount,
                 updatedCount,
                 unchangedCount,
+                skippedCount,
+                failedCount,
                 uninstalledCount);
         }
         finally
@@ -250,23 +282,12 @@ public sealed class InstalledNseScriptSyncService(
 
     private static InstalledNseScriptMetadata ReadMetadata(string file, string scriptName)
     {
-        try
-        {
-            var content = File.ReadAllText(file);
-            var description = ExtractDescription(content)
-                ?? $"Installed Nmap NSE script: {scriptName}.";
-            var categories = ExtractCategories(content);
+        var content = File.ReadAllText(file);
+        var description = ExtractDescription(content)
+            ?? $"Installed Nmap NSE script: {scriptName}.";
+        var categories = ExtractCategories(content);
 
-            return new InstalledNseScriptMetadata(CleanText(description), categories);
-        }
-        catch (IOException)
-        {
-            return new InstalledNseScriptMetadata($"Installed Nmap NSE script: {scriptName}.", []);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return new InstalledNseScriptMetadata($"Installed Nmap NSE script: {scriptName}.", []);
-        }
+        return new InstalledNseScriptMetadata(CleanText(description), categories);
     }
 
     private static string? ExtractDescription(string content)

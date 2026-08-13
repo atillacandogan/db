@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using DbScanner.Application.Models;
 using DbScanner.Domain.Entities;
 using DbScanner.Domain.Enums;
+using DbScanner.Infrastructure.Discovery;
 using DbScanner.Infrastructure.Scanning;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
@@ -18,6 +19,32 @@ public sealed class MsSqlContainerIntegrationTests
 {
     private const string Image =
         "mcr.microsoft.com/mssql/server:2022-CU22-GDR1-ubuntu-22.04";
+
+    [DockerFact]
+    public async Task DiscoveryProbe_ConfirmsRealSqlServerWithoutCredentials()
+    {
+        await using var container = new MsSqlBuilder(Image)
+            .WithPassword(CreatePassword())
+            .WithEnvironment("MSSQL_PID", "Developer")
+            .Build();
+        await container.StartAsync();
+
+        var probe = new TcpDiscoveryProbe(Options.Create(new DiscoveryOptions
+        {
+            ConnectTimeoutMilliseconds = 2000,
+            BannerReadTimeoutMilliseconds = 2000,
+            MaxBannerBytes = 256
+        }));
+        var result = await probe.ProbeAsync(new DiscoveryEndpoint(
+            container.Hostname,
+            container.GetMappedPublicPort(1433),
+            DatabaseEngine.MsSql));
+        var fingerprint = new MsSqlDiscoveryDetector().Detect(result);
+
+        Assert.Equal(TcpDiscoveryProbe.MsSqlPreLoginEvidence, result.ProtocolEvidence);
+        Assert.Equal(DatabaseEngine.MsSql, fingerprint!.Engine);
+        Assert.Equal(DiscoveryFingerprintLevel.Confirmed, fingerprint.Level);
+    }
 
     [DockerFact]
     public async Task AuthenticatedProbe_ExercisesRealSqlServerSafely()
