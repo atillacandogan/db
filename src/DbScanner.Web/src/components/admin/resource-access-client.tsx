@@ -6,6 +6,7 @@ import { apiGet, apiPost } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import type { AccessDirectory } from "@/lib/api/resource-access";
+import { ResourceAccessAudit } from "./resource-access-audit";
 
 export function ResourceAccessClient() {
   const cache = useQueryClient();
@@ -80,5 +81,8 @@ export function ResourceAccessClient() {
         </div>
       </section>
     </div>
+    <ResourceAccessAudit limit={5} title="Son işlemler"
+      description="Proje, ekip, üyelik ve izin değişiklikleri. Tarama ve oturum olayları bu geçmişin kapsamında değildir."
+      allHref="/admin/resource-access/audit" allLabel="Tüm denetim geçmişini gör →" />
   </div>;
 }

@@ -12,14 +12,19 @@ import { ResourceAccessUserPicker } from "./resource-access-user-picker";
 import { ResourceAccessTeamGrants } from "./resource-access-team-grants";
 
 const relatedQueryKeys = ["resource-access", "resource-access-team", "resource-access-project", "resource-access-audit", "resource-access-preview", "targets", "dashboard"];
+const maximumTeamBatchSize = 50;
 
 export function ResourceAccessTeamDetail({ teamId }: { teamId: string }) {
+  return <ResourceAccessTeamDetailView key={teamId} teamId={teamId} />;
+}
+
+function ResourceAccessTeamDetailView({ teamId }: { teamId: string }) {
   const cache = useQueryClient();
   const teamPath = `/api/access/teams/${encodeURIComponent(teamId)}`;
   const teamQuery = useQuery({ queryKey: ["resource-access-team", teamId], queryFn: () => apiGet<AccessTeamDetail>(teamPath), retry: false });
   const [name, setName] = useState<string | null>(null);
   const [confirmArchive, setConfirmArchive] = useState(false);
-  const [selectedUser, setSelectedUser] = useState<AccessIdentityUser | null>(null);
+  const [selectedUsers, setSelectedUsers] = useState<AccessIdentityUser[]>([]);
   const [previewSubject, setPreviewSubject] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
@@ -28,14 +33,27 @@ export function ResourceAccessTeamDetail({ teamId }: { teamId: string }) {
     if (teamQuery.isFetching) throw new Error("Ekip bilgileri yenileniyor. Güncelleme tamamlanınca tekrar deneyin.");
     return action();
   },
-    onSuccess: async () => { await Promise.all(relatedQueryKeys.map(key => cache.invalidateQueries({ queryKey: [key] }))); setNotice({ message: "Değişiklikler ve denetim kaydı kaydedildi.", error: false }); setConfirmArchive(false); },
+    onSuccess: async result => {
+      await Promise.all(relatedQueryKeys.map(key => cache.invalidateQueries({ queryKey: [key] })));
+      const batchResult = result && typeof result === "object" && "addedCount" in result
+        && typeof result.addedCount === "number" ? result as { addedCount: number; alreadyMemberCount?: number } : null;
+      const message = batchResult
+        ? `${batchResult.addedCount} kullanıcı eklendi.${batchResult.alreadyMemberCount ? ` ${batchResult.alreadyMemberCount} kullanıcı zaten ekip üyesiydi.` : ""} Denetim kayıtları kaydedildi.`
+        : "Değişiklikler ve denetim kaydı kaydedildi.";
+      setNotice({ message, error: false }); setConfirmArchive(false);
+    },
     onError: (error: Error) => setNotice({ message: error.message, error: true }),
   });
   if (teamQuery.isPending) return <p role="status" lang="tr">Ekip ayrıntıları yükleniyor…</p>;
   if (teamQuery.isError) return <section role="alert" lang="tr"><p>{teamQuery.error.message}</p><Button onClick={() => void teamQuery.refetch()}>Tekrar dene</Button><p><Link href="/admin/resource-access">Ekip yönetimine dön</Link></p></section>;
   const data = teamQuery.data;
   const busy = change.isPending || teamQuery.isFetching;
-  const alreadyMember = data.members.some(member => member.subject === selectedUser?.id);
+  const memberIds = data.members.map(member => member.subject);
+  const availableSelectedUsers = selectedUsers.filter(user => user.enabled && !memberIds.includes(user.id));
+  const toggleSelectedUser = (user: AccessIdentityUser) => setSelectedUsers(current =>
+    current.some(selectedUser => selectedUser.id === user.id)
+      ? current.filter(selectedUser => selectedUser.id !== user.id)
+      : [...current, user]);
   const affectedTargets = data.targets.filter(target => data.grants.some(grant => grant.projectId === target.projectId && (!grant.targetId || grant.targetId === target.id)));
   return <div className="resource-access-page" lang="tr">
     <Link className="resource-access-back" href="/admin/resource-access">← Ekip ve Hedef Yetkileri</Link>
@@ -56,8 +74,20 @@ export function ResourceAccessTeamDetail({ teamId }: { teamId: string }) {
       <section className="resource-access-card"><h2>Üyeler</h2>
         <ul className="resource-access-detail-members">{data.members.map(member => <li key={member.subject}><code>{member.subject}</code><div><a href="#team-access-preview" onClick={() => { setPreviewSubject(member.subject); setPreviewOpen(true); }}>İzinleri incele</a><button type="button" className="resource-access-remove" disabled={busy} onClick={() => change.mutate(() => apiDelete(`${teamPath}/members/${encodeURIComponent(member.subject)}`))}>Üyeliği kaldır</button></div></li>)}</ul>
         {!data.members.length && <p className="resource-access-empty">Henüz üye yok.</p>}
-        {!data.team.isArchived && <form onSubmit={event => { event.preventDefault(); if (busy || !selectedUser?.enabled || alreadyMember) return; const subject = selectedUser.id; change.mutate(async () => { await apiPut(`${teamPath}/members`, { subject }); setSelectedUser(null); }); }}>
-          <ResourceAccessUserPicker selected={selectedUser} onSelect={setSelectedUser} disabled={busy} /><Button disabled={busy || !selectedUser?.enabled || alreadyMember}>{alreadyMember ? "Zaten ekip üyesi" : "Seçilen kullanıcıyı ekle"}</Button>
+        {!data.team.isArchived && <form onSubmit={event => {
+          event.preventDefault();
+          if (busy || availableSelectedUsers.length === 0 || availableSelectedUsers.length > maximumTeamBatchSize) return;
+          const subjects = availableSelectedUsers.map(user => user.id);
+          change.mutate(async () => {
+            const result = await apiPut<{ addedCount: number; alreadyMemberCount: number }>(`${teamPath}/members/batch`, { subjects });
+            setSelectedUsers([]);
+            return result;
+          });
+        }}>
+          <ResourceAccessUserPicker selectedUsers={selectedUsers} onToggleUser={toggleSelectedUser} existingUserIds={memberIds} maxSelected={maximumTeamBatchSize} disabled={busy} />
+          <Button disabled={busy || availableSelectedUsers.length === 0 || availableSelectedUsers.length > maximumTeamBatchSize}>
+            {selectedUsers.length > 0 && availableSelectedUsers.length === 0 ? "Seçilenler zaten ekip üyesi" : `Seçilen ${availableSelectedUsers.length} kullanıcıyı ekle`}
+          </Button>
         </form>}
       </section>
     </div>

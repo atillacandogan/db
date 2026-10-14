@@ -13,6 +13,7 @@ namespace DbScanner.Api.Security;
 
 public sealed record AccessNameRequest(string Name);
 public sealed record TeamMembershipRequest(string Subject);
+public sealed record TeamMembershipBatchRequest(IReadOnlyList<string?>? Subjects);
 public sealed record AccessGrantRequest(Guid TeamId, Guid ProjectId, Guid? TargetId, TargetPermission Permissions);
 public sealed record TargetProjectRequest(Guid ProjectId);
 
@@ -120,6 +121,56 @@ public static class ResourceAccessEndpoints
             }
             await db.SaveChangesAsync(ct);
             return Results.NoContent();
+        });
+        group.MapPut("/teams/{teamId:guid}/members/batch", async (Guid teamId, TeamMembershipBatchRequest request,
+            DbScannerDbContext db, IKeycloakAdminService identity, IOptions<TenantIsolationOptions> tenancy,
+            HttpContext http, ResourceAccessContext access, CancellationToken ct) =>
+        {
+            const int maximumBatchSize = 50;
+            if (request.Subjects is null || request.Subjects.Count is < 1 or > maximumBatchSize
+                || request.Subjects.Any(subject => string.IsNullOrWhiteSpace(subject) || subject.Length > 256 || subject != subject.Trim()))
+                return Results.BadRequest(new { message = $"1 ile {maximumBatchSize} arasında geçerli Keycloak kullanıcı ID'si gönderilmelidir." });
+            if (tenancy.Value.DedicatedTenant) return IdentityScopeUnavailable();
+
+            var subjects = request.Subjects.Select(subject => subject!).Distinct(StringComparer.Ordinal).ToArray();
+            var team = await db.AccessTeams.SingleOrDefaultAsync(t => t.Id == teamId, ct);
+            if (team is null) return Results.NotFound();
+            if (team.IsArchived) return Results.Conflict(new { message = "Arşivlenmiş bir ekibe üye eklenemez." });
+
+            var users = new List<(string Subject, string Username)>();
+            try
+            {
+                // Validate every identity before making any database change so a failed batch cannot partially add members.
+                foreach (var subject in subjects)
+                {
+                    var user = await identity.GetUserAsync(subject, ct);
+                    if (user is null || user.Id != subject)
+                        return Results.NotFound(new { code = "IDENTITY_USER_NOT_FOUND", message = "Kullanıcı Keycloak'ta bulunamadı. Kullanıcıları listeden yeniden seçin." });
+                    if (!user.Enabled)
+                        return Results.Conflict(new { code = "IDENTITY_USER_DISABLED", message = "Devre dışı bir kullanıcı ekibe eklenemez." });
+                    users.Add((subject, user.Username));
+                }
+            }
+            catch (Exception error) when (error is IdentityManagementUnavailableException or InvalidOperationException)
+            { return IdentityUnavailable(); }
+
+            var existingSubjects = await db.AccessTeamMembers.AsNoTracking()
+                .Where(member => member.TeamId == teamId && subjects.Contains(member.Subject))
+                .Select(member => member.Subject).ToListAsync(ct);
+            var existing = existingSubjects.ToHashSet(StringComparer.Ordinal);
+            var addedCount = 0;
+            foreach (var user in users)
+            {
+                if (existing.Contains(user.Subject)) continue;
+                db.AccessTeamMembers.Add(new AccessTeamMember { TeamId = teamId, Subject = user.Subject });
+                ResourceAccessAuditWriter.Record(db, http, access, "member.added", "member", user.Subject, teamId,
+                    null, new { teamId, subject = user.Subject, username = user.Username });
+                addedCount++;
+            }
+
+            // Member rows and their audit records are persisted together by one SaveChanges call.
+            await db.SaveChangesAsync(ct);
+            return Results.Ok(new { addedCount, alreadyMemberCount = subjects.Length - addedCount });
         });
         group.MapDelete("/teams/{teamId:guid}/members/{subject}", async (Guid teamId, string subject, DbScannerDbContext db,
             HttpContext http, ResourceAccessContext access, CancellationToken ct) =>

@@ -325,7 +325,9 @@ public sealed class ResourceAccessIdentityEndpointTests
         using var detail = await host.Client.GetAsync($"/api/access/teams/{host.TeamId}");
         Assert.Contains("\"isArchived\":true", await detail.Content.ReadAsStringAsync());
         using var blockedMember = await host.AddMember(IdentityStub.User.Id);
+        using var blockedBatch = await host.Client.PutAsJsonAsync($"/api/access/teams/{host.TeamId}/members/batch", new { subjects = new[] { IdentityStub.User.Id } });
         Assert.Equal(HttpStatusCode.Conflict, blockedMember.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, blockedBatch.StatusCode);
         using var blockedGrant = await host.Client.PutAsJsonAsync("/api/access/grants", new { teamId = host.TeamId, projectId = host.ProjectId, permissions = 1 });
         Assert.Equal(HttpStatusCode.Conflict, blockedGrant.StatusCode);
     }
@@ -472,8 +474,10 @@ public sealed class ResourceAccessIdentityEndpointTests
         await using var host = await Harness.Start(role: role);
         using var lookup = await host.Client.GetAsync("/api/access/users");
         using var membership = await host.AddMember(IdentityStub.User.Id);
+        using var batch = await host.Client.PutAsJsonAsync($"/api/access/teams/{host.TeamId}/members/batch", new { subjects = new[] { IdentityStub.User.Id } });
         Assert.Equal(expected, lookup.StatusCode);
         Assert.Equal(expected, membership.StatusCode);
+        Assert.Equal(expected, batch.StatusCode);
         Assert.Equal(0, host.Identity.ListCalls + host.Identity.GetCalls);
         Assert.Equal(0, await host.MemberCount());
     }
@@ -484,8 +488,10 @@ public sealed class ResourceAccessIdentityEndpointTests
         await using var host = await Harness.Start(dedicated: true);
         using var lookup = await host.Client.GetAsync("/api/access/users");
         using var membership = await host.AddMember(IdentityStub.User.Id);
+        using var batch = await host.Client.PutAsJsonAsync($"/api/access/teams/{host.TeamId}/members/batch", new { subjects = new[] { IdentityStub.User.Id } });
         Assert.Equal(HttpStatusCode.Forbidden, lookup.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, membership.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, batch.StatusCode);
         Assert.Equal(0, host.Identity.ListCalls + host.Identity.GetCalls);
         Assert.Equal(0, await host.MemberCount());
     }
@@ -519,6 +525,66 @@ public sealed class ResourceAccessIdentityEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, stale.StatusCode);
     }
 
+    [Fact]
+    public async Task Batch_membership_adds_multiple_users_with_individual_audit_and_is_idempotent()
+    {
+        await using var host = await Harness.Start();
+        var second = IdentityStub.User with { Id = "7c6fd9ae-42e0-44b4-a46c-34e3b6618f6f", Username = "grace" };
+        var third = IdentityStub.User with { Id = "1617ee04-cc8d-4f41-a5ae-4df4a235aeb9", Username = "katherine" };
+        host.Identity.AdditionalUsers.AddRange([second, third]);
+
+        using var response = await host.Client.PutAsJsonAsync($"/api/access/teams/{host.TeamId}/members/batch",
+            new { subjects = new[] { IdentityStub.User.Id, second.Id, third.Id, second.Id } });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(3, json.RootElement.GetProperty("addedCount").GetInt32());
+        Assert.Equal(0, json.RootElement.GetProperty("alreadyMemberCount").GetInt32());
+        Assert.Equal(3, await host.MemberCount());
+        Assert.Equal(3, await host.ReadDb(db => db.ResourceAccessAudits.CountAsync(a => a.Action == "member.added")));
+
+        using var repeated = await host.Client.PutAsJsonAsync($"/api/access/teams/{host.TeamId}/members/batch",
+            new { subjects = new[] { IdentityStub.User.Id, second.Id, third.Id } });
+        using var repeatedJson = JsonDocument.Parse(await repeated.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, repeated.StatusCode);
+        Assert.Equal(0, repeatedJson.RootElement.GetProperty("addedCount").GetInt32());
+        Assert.Equal(3, repeatedJson.RootElement.GetProperty("alreadyMemberCount").GetInt32());
+        Assert.Equal(3, await host.ReadDb(db => db.ResourceAccessAudits.CountAsync(a => a.Action == "member.added")));
+    }
+
+    [Fact]
+    public async Task Batch_membership_validates_all_identities_before_writing_anything()
+    {
+        await using var host = await Harness.Start();
+        foreach (var (secondSubject, expected) in new[]
+        {
+            ("disabled", HttpStatusCode.Conflict),
+            ("missing", HttpStatusCode.NotFound),
+        })
+        {
+            using var response = await host.Client.PutAsJsonAsync($"/api/access/teams/{host.TeamId}/members/batch",
+                new { subjects = new[] { IdentityStub.User.Id, secondSubject } });
+            Assert.Equal(expected, response.StatusCode);
+            Assert.Equal(0, await host.MemberCount());
+            Assert.Equal(0, await host.ReadDb(db => db.ResourceAccessAudits.CountAsync()));
+        }
+    }
+
+    [Fact]
+    public async Task Batch_membership_rejects_invalid_size_or_subjects_without_identity_calls()
+    {
+        await using var host = await Harness.Start();
+        var path = $"/api/access/teams/{host.TeamId}/members/batch";
+        using var empty = await host.Client.PutAsJsonAsync(path, new { subjects = Array.Empty<string>() });
+        using var oversized = await host.Client.PutAsJsonAsync(path, new { subjects = Enumerable.Range(0, 51).Select(index => $"user-{index}").ToArray() });
+        using var malformed = await host.Client.PutAsJsonAsync(path, new { subjects = new string?[] { IdentityStub.User.Id, " bad " } });
+        Assert.Equal(HttpStatusCode.BadRequest, empty.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, oversized.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
+        Assert.Equal(0, host.Identity.GetCalls);
+        Assert.Equal(0, await host.MemberCount());
+        Assert.Equal(0, await host.ReadDb(db => db.ResourceAccessAudits.CountAsync()));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -529,10 +595,13 @@ public sealed class ResourceAccessIdentityEndpointTests
         host.Identity.Rejected = rejected;
         using var lookup = await host.Client.GetAsync("/api/access/users");
         using var membership = await host.AddMember(IdentityStub.User.Id);
+        using var batch = await host.Client.PutAsJsonAsync($"/api/access/teams/{host.TeamId}/members/batch", new { subjects = new[] { IdentityStub.User.Id } });
         Assert.Equal(HttpStatusCode.ServiceUnavailable, lookup.StatusCode);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, membership.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, batch.StatusCode);
         Assert.DoesNotContain("raw-provider-secret", await lookup.Content.ReadAsStringAsync());
         Assert.DoesNotContain("raw-provider-secret", await membership.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("raw-provider-secret", await batch.Content.ReadAsStringAsync());
         Assert.Equal(0, await host.MemberCount());
     }
 
@@ -662,6 +731,7 @@ public sealed class ResourceAccessIdentityEndpointTests
         public int PageSize { get; private set; }
         public int ListCalls { get; private set; }
         public int GetCalls { get; private set; }
+        public List<IdentityUser> AdditionalUsers { get; } = [];
         public Task<IdentityUserPage> ListUsersAsync(string? search, string? role, bool? enabled, int page, int pageSize, CancellationToken ct = default)
         {
             ListCalls++; Search = search; Page = page; PageSize = pageSize;
@@ -672,7 +742,10 @@ public sealed class ResourceAccessIdentityEndpointTests
         {
             GetCalls++;
             if (Fail) throw Rejected ? new InvalidOperationException("raw-provider-secret") : new IdentityManagementUnavailableException("raw-provider-secret");
-            return Task.FromResult<IdentityUser?>(id == "disabled" ? User with { Id = id, Enabled = false } : id == User.Id && !Removed ? CurrentUser : null);
+            var found = id == "disabled" ? User with { Id = id, Enabled = false }
+                : id == User.Id && !Removed ? CurrentUser
+                : AdditionalUsers.FirstOrDefault(user => user.Id == id);
+            return Task.FromResult<IdentityUser?>(found);
         }
         public Task<IdentityUser> CreateUserAsync(CreateAdminUserCommand command, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IdentityUser> UpdateUserAsync(string id, UpdateAdminUserCommand command, CancellationToken ct = default) => throw new NotSupportedException();

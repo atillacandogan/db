@@ -242,6 +242,20 @@ test("user picker shows real Keycloak IDs and Turkish selected-user copy", () =>
   assert.match(html, /aria-pressed="true"/);
 });
 
+test("multi-user picker preserves selected users and marks existing members", () => {
+  const existingMember = { ...user, id: "already-in-team", username: "existing" };
+  const html = ui({ queries: { "resource-access-users": success(page([user, existingMember])) } })
+    .render("components/admin/resource-access-user-picker", "ResourceAccessUserPicker", {
+      selectedUsers: [user], onToggleUser() {}, existingUserIds: [existingMember.id],
+    });
+  assert.match(html, /Birden fazla kullanıcı seçebilirsiniz/);
+  assert.match(html, /1 kullanıcı seçildi/);
+  assert.match(html, /Seçilen: @cagri|@cagri/);
+  assert.match(html, /aria-pressed="true"/);
+  assert.match(html, /Ekip üyesi/);
+  assert.match(html, /disabled="" aria-pressed="false"/);
+});
+
 test("dedicated user picker remains disabled until tenant-scoped identity is configured", () => {
   const html = ui({ queries: { "access-me": success({ dedicatedTenant: true }) } })
     .render("components/admin/resource-access-user-picker", "ResourceAccessUserPicker", { selected: null, onSelect: () => {} });
@@ -249,15 +263,17 @@ test("dedicated user picker remains disabled until tenant-scoped identity is con
   assert.match(html, /disabled=""/);
 });
 
-test("directory keeps the original two-card grid with scoped actions only in details", () => {
+test("directory keeps the two-card project/team grid and places recent audit below it", () => {
   const queryConfigurations = [];
   const html = ui({ queryConfigurations }).render("components/admin/resource-access-client", "ResourceAccessClient");
   for (const text of ["Ekip ve Hedef Yetkileri", "Yeni proje adı", "Yeni ekip adı", "Hedefleri proje detaylarından, üyeleri ve izinleri ekip detaylarından yönetin"]) assert.ok(html.includes(text), text);
   assert.match(html, /class="resource-access-grid"/);
   assert.match(html, /lang="tr"/);
-  assert.equal((html.match(/<section\b/g) ?? []).length, 2);
-  assert.doesNotMatch(html, /Keycloak kullanıcılarında ara|Denetim geçmişi|Etkin erişim önizlemesi|<select\b|<table\b/);
-  assert.deepEqual(queryConfigurations.map(query => query.queryKey[0]), ["resource-access", "access-me"]);
+  assert.equal((html.match(/<section\b/g) ?? []).length, 3);
+  assert.ok(html.indexOf("resource-access-audit\"") > html.indexOf("</section>", html.indexOf("resource-access-teams")));
+  assert.doesNotMatch(html, /Keycloak kullanıcılarında ara|Etkin erişim önizlemesi/);
+  assert.match(html, /<table>/);
+  assert.deepEqual(queryConfigurations.map(query => query.queryKey[0]), ["resource-access", "access-me", "resource-access-audit"]);
 });
 
 test("projects and teams have separate labelled sections, creation forms and directory lists", () => {
@@ -536,6 +552,33 @@ test("project audit labels keep API action keys and existing team filtering", as
   assert.equal(paths[0], "/api/access/audit?page=1&action=&teamId=team-31");
 });
 
+test("resource access overview shows five recent audit records and links to the full history", () => {
+  const records = Array.from({ length: 7 }, (_, index) => ({
+    id: `audit-${index}`, timestamp: `2026-10-14T12:0${index}:00Z`, actorUsername: "dbscanner-admin",
+    actorSubject: user.id, action: "team.created", entityType: "team", entityId: `team-${index}`,
+    beforeJson: null, afterJson: JSON.stringify({ name: `Ekip ${index}` }),
+  }));
+  const html = ui({ queries: { "resource-access-audit": success({ items: records, totalCount: 12, page: 1, pageSize: 20 }) } })
+    .render("components/admin/resource-access-client", "ResourceAccessClient");
+  assert.match(html, /Son işlemler/);
+  assert.match(html, /Tarama ve oturum olayları bu geçmişin kapsamında değildir/);
+  assert.match(html, /href="\/admin\/resource-access\/audit"[^>]*>Tüm denetim geçmişini gör/);
+  assert.match(html, /12 kayıt · Son 5 kayıt gösteriliyor/);
+  const rows = html.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1] ?? "";
+  assert.equal((rows.match(/<tr\b/g) ?? []).length, 5);
+  assert.ok(rows.includes("team-0"));
+  assert.ok(!rows.includes("team-5"));
+});
+
+test("full resource access audit page stays admin-only", () => {
+  const denied = ui({ roles: ["dbscanner-viewer"] }).render("app/admin/resource-access/audit/page");
+  assert.match(denied, /Erişim Engellendi/);
+  assert.doesNotMatch(denied, /Tüm işlemler/);
+  const admin = ui().render("app/admin/resource-access/audit/page");
+  assert.match(admin, /Denetim geçmişi/);
+  assert.match(admin, /href="\/admin\/resource-access"/);
+});
+
 const projectDirectory = {
   projects: [emptyProject.project, { id: "project-99", name: "Entegrasyon Projesi" }],
   teams: populatedProject.teams, members: [], grants: populatedProject.grants,
@@ -644,6 +687,24 @@ test("team detail owns real-user membership and permissions with lazy disclosure
   assert.doesNotMatch(html, /<form[^>]*resource-access-grant-editor/);
 });
 
+test("team detail sends the selected users together to the batch membership endpoint", async () => {
+  const secondUser = { ...user, id: "second-user-id", username: "grace" };
+  const thirdUser = { ...user, id: "third-user-id", username: "katherine" };
+  const calls = [], submittedActions = [];
+  const elements = [];
+  ui({ elements, submittedActions,
+    states: [null, false, [secondUser, thirdUser], "", false, false, null, "", "", 1],
+    queries: { "resource-access-team": success(teamDetails) },
+    api: { apiPut: async (path, body) => { calls.push({ path, body }); return { addedCount: 2, alreadyMemberCount: 0 }; } },
+  }).render("components/admin/resource-access-team-detail", "ResourceAccessTeamDetail", { teamId: "team-31" });
+  assert.ok(elements.some(element => element.type === "button" && element.props.children === "Seçilen 2 kullanıcıyı ekle"));
+  const membershipForm = elements.filter(element => element.type === "form")[1];
+  membershipForm.props.onSubmit({ preventDefault() {} });
+  assert.equal(submittedActions.length, 1);
+  await submittedActions[0].variables();
+  assert.deepEqual(calls, [{ path: "/api/access/teams/team-31/members/batch", body: { subjects: [secondUser.id, thirdUser.id] } }]);
+});
+
 test("new team grant fixes team scope, supports whole-project/target permissions and always requires Read", async () => {
   for (const targetId of ["", "target-17"]) {
     const elements = [], actions = [], calls = [];
@@ -727,7 +788,7 @@ test("project history is lazy and team preview/history mount only when opened", 
   renderProject(emptyProject, { queryConfigurations: closedQueries });
   assert.ok(!closedQueries.some(query => query.queryKey[0] === "resource-access-audit"));
   const openedQueries = [];
-  ui({ queryConfigurations: openedQueries, states: [null, false, null, user.id, true, true], queries: { "resource-access-team": success(teamDetails) } })
+  ui({ queryConfigurations: openedQueries, states: [null, false, [], user.id, true, true, null, "", "", 1], queries: { "resource-access-team": success(teamDetails) } })
     .render("components/admin/resource-access-team-detail", "ResourceAccessTeamDetail", { teamId: "team-31" });
   assert.ok(openedQueries.some(query => query.queryKey[0] === "resource-access-preview"));
   assert.ok(openedQueries.some(query => query.queryKey[0] === "resource-access-audit"));

@@ -5038,6 +5038,11 @@ h1 {
 .resource-access-user-handle { font-size: 11px; color: var(--color-muted); overflow-wrap: anywhere; }
 .resource-access-page code { display: block; font-size: 11px; line-height: 1.5; color: #53617c; overflow-wrap: anywhere; user-select: text; }
 .resource-access-selection { display: grid; gap: 4px; background: #eff5f1; border: 1px solid #cee2d4; border-radius: 7px; padding: 10px; font-size: 12px; }
+.resource-access-selected-users { display: grid; gap: 6px; margin: 4px 0 0; padding: 0; list-style: none; }
+.resource-access-selected-users li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid #dce8df; }
+.resource-access-selected-users li > span { min-width: 0; overflow-wrap: anywhere; }
+.resource-access-selected-users li button { flex-shrink: 0; border: 1px solid #cbd8ce; border-radius: 5px; padding: 4px 8px; background: white; color: #53617c; font-size: 11px; }
+.resource-access-selected-users li button:disabled { opacity: .6; cursor: not-allowed; }
 .resource-access-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--color-muted); }
 .resource-access-pager button { border: 1px solid #dce1eb; border-radius: 5px; padding: 4px 8px; background: white; color: #53617c; font-size: 11px; }
 .resource-access-team-list { border-left: 1px solid #e9edf4; padding-left: 20px; min-width: 0; }
@@ -5093,6 +5098,8 @@ h1 {
 .resource-access-preview-basis { border-top: 1px solid #e9edf4; padding-top: 12px; font-size: 11px; line-height: 1.6; color: var(--color-muted); }
 .resource-access-audit-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .resource-access-audit-toolbar > div { display: grid; gap: 8px; width: min(320px, 100%); }
+.resource-access-audit-all-link { margin-left: auto; color: #495bb2; font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.resource-access-audit-all-link:hover { text-decoration: underline; }
 .resource-access-audit td { vertical-align: top; }
 .resource-access-audit time { font-size: 11px; white-space: nowrap; }
 .resource-access-audit details { min-width: 160px; }
@@ -5169,6 +5176,8 @@ h1 {
   .resource-access-preview-grid, .resource-access-detail-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
+  .resource-access-audit .resource-access-card-heading { flex-direction: column; }
+  .resource-access-audit-all-link { margin-left: 0; }
   .resource-access-section-toolbar { flex-direction: column; align-items: stretch; }
   .resource-access-page .resource-access-project-target-move { grid-template-columns: 1fr; }
   .resource-access-disclosure { padding: 16px; }
