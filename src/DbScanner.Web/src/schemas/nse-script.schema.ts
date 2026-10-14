@@ -9,6 +9,7 @@ export type NseScriptSource = "installed" | "manual";
 
 export type NseScriptDto = {
   id: string;
+  executorType?: string;
   nseScriptName: string;
   displayName: string;
   supportedEngines: NseScriptEngine[];
@@ -23,6 +24,7 @@ export type NseScriptDto = {
   severity: ScriptSeverity;
   weight: number;
   categories?: string;
+  configurationSchema?: string;
   remediationTemplate?: string;
   docUrl?: string;
   source: NseScriptSource;

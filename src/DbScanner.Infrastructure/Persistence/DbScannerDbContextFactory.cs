@@ -8,12 +8,14 @@ public sealed class DbScannerDbContextFactory : IDesignTimeDbContextFactory<DbSc
     public DbScannerDbContext CreateDbContext(string[] args)
     {
         var connectionString = Environment.GetEnvironmentVariable("DBSCANNER_MIGRATION_CONNECTION")
-            ?? "Host=localhost;Port=5432;Database=dbscanner;Username=postgres;Password=postgres";
+            // Model-only migration commands need no database credentials. Database
+            // updates must supply DBSCANNER_MIGRATION_CONNECTION explicitly.
+            ?? "Host=localhost;Port=5432;Database=dbscanner;Username=postgres";
 
         var options = new DbContextOptionsBuilder<DbScannerDbContext>()
             .UseNpgsql(connectionString)
             .Options;
 
-        return new DbScannerDbContext(options);
+        return new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
     }
 }

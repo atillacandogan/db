@@ -16,7 +16,7 @@ export type UpsertRuleRequest = {
   matcherExpression: string;
   remediation: string;
   supportedEngines: DatabaseEngine[];
-  nseScripts: string[];
+  scanChecks: string[];
 };
 
 export function getRules(): Promise<RuleDto[]> {

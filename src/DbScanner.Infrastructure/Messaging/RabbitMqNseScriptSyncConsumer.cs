@@ -3,6 +3,7 @@ using System.Text.Json;
 using DbScanner.Application.Models;
 using DbScanner.Application.Ports;
 using DbScanner.Contracts.NseScripts;
+using DbScanner.Infrastructure.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -15,6 +16,7 @@ internal sealed class RabbitMqNseScriptSyncConsumer(
     RabbitMqConnectionFactory connectionFactory,
     IServiceScopeFactory serviceScopeFactory,
     IOptions<RabbitMqOptions> options,
+    IOptions<TenantIsolationOptions> tenantOptions,
     ILogger<RabbitMqNseScriptSyncConsumer> logger) : INseScriptSyncConsumer
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -60,6 +62,11 @@ internal sealed class RabbitMqNseScriptSyncConsumer(
         {
             request = JsonSerializer.Deserialize<NseScriptSyncRequestedMessage>(args.Body.Span, JsonOptions)
                 ?? throw new InvalidOperationException("NSE script sync request was empty.");
+            if (!tenantOptions.Value.AcceptsMessage(request.TenantId))
+            {
+                await channel.BasicRejectAsync(args.DeliveryTag, requeue: false, cancellationToken);
+                return;
+            }
 
             using var scope = serviceScopeFactory.CreateScope();
             var syncService = scope.ServiceProvider.GetRequiredService<INseScriptSyncService>();
@@ -82,6 +89,7 @@ internal sealed class RabbitMqNseScriptSyncConsumer(
                 exception.Message);
         }
 
+        response = response with { TenantId = tenantOptions.Value.TenantId };
         if (!string.IsNullOrWhiteSpace(args.BasicProperties.ReplyTo))
         {
             var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response, JsonOptions));

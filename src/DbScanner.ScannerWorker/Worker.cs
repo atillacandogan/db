@@ -24,9 +24,26 @@ public class Worker(
         }
 
         await Task.WhenAll(
-            scanJobConsumer.StartAsync(stoppingToken),
-            nseScriptSyncConsumer.StartAsync(stoppingToken),
-            discoveryJobConsumer.StartAsync(stoppingToken));
+            RunConsumerWithRecoveryAsync(scanJobConsumer.StartAsync, "scan", stoppingToken),
+            RunConsumerWithRecoveryAsync(nseScriptSyncConsumer.StartAsync, "script-sync", stoppingToken),
+            RunConsumerWithRecoveryAsync(discoveryJobConsumer.StartAsync, "discovery", stoppingToken));
+    }
+
+    private async Task RunConsumerWithRecoveryAsync(Func<CancellationToken, Task> start,
+        string name, CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try { await start(stoppingToken); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+            catch (Exception exception)
+            {
+                logger.LogWarning("{Consumer} consumer disconnected ({ErrorType}); reconnecting.",
+                    name, exception.GetType().Name);
+            }
+            if (!stoppingToken.IsCancellationRequested)
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+        }
     }
 
     private async Task SyncInstalledNseScriptsAsync(CancellationToken cancellationToken)

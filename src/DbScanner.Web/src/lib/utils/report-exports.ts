@@ -67,10 +67,10 @@ export function exportScanAsXlsx(scan: ScanDto) {
       })),
     },
     {
-      name: "Script Results",
+      name: "Scan Check Results",
       columns: [
-        { key: "scriptName", header: "Script Name", width: 32 },
-        { key: "nseScriptId", header: "NSE Script ID", width: 30 },
+        { key: "scriptName", header: "Scan Check", width: 32 },
+        { key: "scanCheckId", header: "Scan Check ID", width: 30 },
         { key: "status", header: "Status", width: 24 },
         { key: "exitCode", header: "Exit Code", width: 12 },
         { key: "createdAt", header: "Created At", width: 24 },
@@ -78,7 +78,7 @@ export function exportScanAsXlsx(scan: ScanDto) {
       ],
       rows: scan.scriptResults.map((result) => ({
         scriptName: result.scriptName,
-        nseScriptId: result.nseScriptId,
+        scanCheckId: result.scanCheckId,
         status: result.resultStatus,
         exitCode: result.exitCode,
         createdAt: result.createdAt,
@@ -96,14 +96,28 @@ export function exportScanAsJson(scan: ScanDto) {
 }
 
 export async function exportScanAsPdf(scan: ScanDto) {
+  const blob = await createPdfBlob(createScanPdfDefinition(scan));
+  downloadPdf(scanFilename(scan), blob);
+}
+
+export async function exportDiscoveryAsPdf(job: DiscoveryJobDto) {
+  const blob = await createPdfBlob(createDiscoveryPdfDefinition(job));
+  downloadPdf(discoveryFilename(job), blob);
+}
+
+export async function exportFindingsAsPdf(findings: FindingListItemDto[]) {
+  const blob = await createPdfBlob(createFindingsPdfDefinition(findings));
+  downloadPdf(findingsFilename(), blob);
+}
+
+async function createPdfBlob(definition: TDocumentDefinitions) {
   const [{ default: pdfMake }, { default: pdfFonts }] = await Promise.all([
     import("pdfmake/build/pdfmake"),
     import("pdfmake/build/vfs_fonts"),
   ]);
 
   pdfMake.addVirtualFileSystem(pdfFonts);
-  const blob = await pdfMake.createPdf(createScanPdfDefinition(scan)).getBlob();
-  downloadPdf(scanFilename(scan), blob);
+  return pdfMake.createPdf(definition).getBlob();
 }
 
 export function exportDiscoveryAsXlsx(job: DiscoveryJobDto) {
@@ -159,6 +173,186 @@ export function exportFindingsAsXlsx(findings: FindingListItemDto[]) {
 
 export function exportFindingsAsCsv(findings: FindingListItemDto[]) {
   downloadCsv(findingsFilename(), findingColumns, findings.map(findingRow));
+}
+
+export function createDiscoveryPdfDefinition(job: DiscoveryJobDto): TDocumentDefinitions {
+  const allResults = [...job.supportedDatabases, ...job.unsupportedDatabases];
+  const confirmedCount = allResults.filter((result) => result.fingerprintLevel === "Confirmed").length;
+  const averageConfidence = allResults.length > 0
+    ? Math.round(allResults.reduce((total, result) => total + result.confidence, 0) / allResults.length)
+    : 0;
+  const content: Content[] = [
+    reportCover(
+      "Database Discovery Report",
+      `${pdfText(job.name)} - ${pdfText(job.id)}`,
+      "Credentialless service discovery and protocol fingerprint assessment",
+    ),
+    metricCards([
+      { label: "Supported databases", value: job.supportedDatabases.length, color: "#067647" },
+      { label: "Unsupported services", value: job.unsupportedDatabases.length, color: "#B54708" },
+      { label: "Confirmed fingerprints", value: confirmedCount, color: "#3448C5" },
+      { label: "Average confidence", value: `${averageConfidence}%`, color: "#175CD3" },
+    ]),
+    {
+      text: discoveryExecutiveSummary(job, confirmedCount),
+      style: "lead",
+      margin: [0, 12, 0, 16],
+    },
+    sectionHeading("Discovery scope"),
+    summaryTable([
+      ["Status", job.status],
+      ["Scope", job.scope.replaceAll("\n", ", ")],
+      ["Environment", job.environment],
+      ["Engine filter", job.supportedEngineFilter.join(", ")],
+      ["Created", formatPdfDate(job.createdAt)],
+      ["Started", formatPdfDate(job.startedAt)],
+      ["Finished", formatPdfDate(job.finishedAt)],
+      ...(job.errorMessage ? [["Job error", job.errorMessage] as [string, unknown]] : []),
+    ]),
+    sectionHeading(`Supported databases (${job.supportedDatabases.length})`),
+  ];
+
+  if (job.supportedDatabases.length === 0) {
+    content.push(emptyReportState("No supported database service was confirmed in this discovery scope."));
+  } else {
+    job.supportedDatabases.forEach((result, index) => {
+      content.push(discoveryResultBlock(result, index, true));
+    });
+  }
+
+  content.push(sectionHeading(`Unsupported / informational services (${job.unsupportedDatabases.length})`));
+  if (job.unsupportedDatabases.length === 0) {
+    content.push(emptyReportState("No unsupported or informational service was recorded."));
+  } else {
+    job.unsupportedDatabases.forEach((result, index) => {
+      content.push(discoveryResultBlock(result, index, false));
+    });
+  }
+
+  content.push(
+    sectionHeading("Interpretation notes"),
+    {
+      ul: [
+        "Confirmed means a database protocol response passed the fingerprint validation rules.",
+        "Confidence is an assessment signal, not proof that authentication or authorization will succeed.",
+        "PortHint and unconfirmed services are informational and cannot be added as targets.",
+        "The scanned port identifies the reachable service endpoint; the protocol response identifies the database engine.",
+      ],
+      style: "noteList",
+      margin: [0, 0, 0, 8],
+    },
+  );
+
+  return executiveDocument(
+    `Database Discovery Report - ${job.name}`,
+    `Discovery job ${job.id}`,
+    content,
+    "Discovery Report",
+  );
+}
+
+export function createFindingsPdfDefinition(findings: FindingListItemDto[]): TDocumentDefinitions {
+  const sortedFindings = [...findings].sort((left, right) => {
+    const severityDifference = severityRank(right.severity) - severityRank(left.severity);
+    return severityDifference || new Date(right.detectedAt).getTime() - new Date(left.detectedAt).getTime();
+  });
+  const counts = {
+    critical: countSeverity(findings, "critical"),
+    high: countSeverity(findings, "high"),
+    medium: countSeverity(findings, "medium"),
+    low: countSeverity(findings, "low"),
+    info: countSeverity(findings, "info"),
+  };
+  const openCount = findings.filter((finding) => (finding.status ?? "open") === "open").length;
+  const uniqueTargets = new Set(findings.map((finding) => finding.targetId)).size;
+  const content: Content[] = [
+    reportCover(
+      "Security Findings Report",
+      `${findings.length} findings across ${uniqueTargets} targets`,
+      "Risk overview, supporting evidence, and prioritized remediation guidance",
+    ),
+    metricCards([
+      { label: "Critical", value: counts.critical, color: "#B42318" },
+      { label: "High", value: counts.high, color: "#C4320A" },
+      { label: "Medium", value: counts.medium, color: "#B54708" },
+      { label: "Low", value: counts.low, color: "#175CD3" },
+      { label: "Info", value: counts.info, color: "#475467" },
+    ]),
+    {
+      text: findingsExecutiveSummary(findings.length, openCount, uniqueTargets, counts),
+      style: "lead",
+      margin: [0, 12, 0, 16],
+    },
+    sectionHeading("Risk overview"),
+    summaryTable([
+      ["Total findings", findings.length],
+      ["Open findings", openCount],
+      ["Resolved findings", findings.length - openCount],
+      ["Affected targets", uniqueTargets],
+      ["Critical / High", `${counts.critical} / ${counts.high}`],
+      ["Medium / Low / Info", `${counts.medium} / ${counts.low} / ${counts.info}`],
+      ["Report generated", formatPdfDate(new Date().toISOString())],
+    ]),
+    sectionHeading(`Prioritized findings (${findings.length})`),
+  ];
+
+  if (sortedFindings.length === 0) {
+    content.push(emptyReportState("No security findings were available at report generation time."));
+  } else {
+    sortedFindings.forEach((finding, index) => {
+      const severity = finding.severity.toUpperCase();
+      const status = finding.status ?? "open";
+      const detailStack: Content[] = [
+        {
+          columns: [
+            { text: `${index + 1}. ${pdfText(finding.title)}`, style: "resultTitle", width: "*" },
+            { text: severity, style: "resultBadge", color: severityColor(finding.severity), width: "auto" },
+          ],
+          columnGap: 12,
+        },
+        {
+          text: `${pdfText(finding.targetName)} (${pdfText(finding.targetHost)})  |  ${pdfText(finding.targetEngine)}  |  ${pdfText(status)}`,
+          style: "resultMeta",
+        },
+        {
+          text: `Rule: ${pdfText(finding.ruleId)}  |  Source: ${pdfText(finding.sourceScript)}  |  Score contribution: +${pdfText(finding.scoreContribution)}  |  Detected: ${formatPdfDate(finding.detectedAt)}`,
+          style: "resultMeta",
+          margin: [0, 0, 0, 7],
+        },
+      ];
+
+      if (finding.description) {
+        detailStack.push({ text: "Finding detail", style: "fieldLabel" });
+        detailStack.push({ text: pdfText(finding.description), style: "body" });
+      }
+
+      detailStack.push({ text: "Evidence", style: "fieldLabel", margin: [0, 6, 0, 2] });
+      detailStack.push({ text: pdfText(finding.evidence), style: "evidence" });
+      detailStack.push({ text: "Remediation", style: "fieldLabel", margin: [0, 7, 0, 2] });
+      detailStack.push({ text: pdfText(finding.remediation), style: "body" });
+
+      content.push(reportDetailBlock(detailStack));
+    });
+  }
+
+  content.push(
+    sectionHeading("Prioritization guidance"),
+    {
+      ol: [
+        "Address Critical and High findings first, especially those affecting externally reachable or production targets.",
+        "Validate the evidence against the current target state before making a production change.",
+        "Apply the remediation, rerun the relevant scan, and close the finding only after verification.",
+      ],
+      style: "noteList",
+    },
+  );
+
+  return executiveDocument(
+    `Security Findings Report - ${new Date().toISOString().slice(0, 10)}`,
+    `${findings.length} security findings`,
+    content,
+    "Findings Report",
+  );
 }
 
 function scanSummaryRows(scan: ScanDto): ExportRow[] {
@@ -243,17 +437,17 @@ export function createScanPdfDefinition(scan: ScanDto): TDocumentDefinitions {
     });
   }
 
-  content.push(sectionHeading(`Script Results (${scan.scriptResults.length})`));
+  content.push(sectionHeading(`Scan Check Results (${scan.scriptResults.length})`));
 
   if (scan.scriptResults.length === 0) {
-    content.push({ text: "Bu scan için script sonucu bulunmuyor.", style: "emptyState" });
+    content.push({ text: "Bu scan için scan check sonucu bulunmuyor.", style: "emptyState" });
   } else {
     scan.scriptResults.forEach((result, index) => {
       content.push({
         stack: [
           { text: `${index + 1}. ${pdfText(result.scriptName)}`, style: "cardTitle" },
           {
-            text: `NSE Script: ${pdfText(result.nseScriptId)}  |  Status: ${pdfText(result.resultStatus)}  |  Exit Code: ${pdfText(result.exitCode)}`,
+            text: `Scan Check: ${pdfText(result.scanCheckId)}  |  Status: ${pdfText(result.resultStatus)}  |  Exit Code: ${pdfText(result.exitCode)}`,
             style: "cardMeta",
           },
           { text: "Normalized Output", style: "fieldLabel" },
@@ -305,6 +499,232 @@ export function createScanPdfDefinition(scan: ScanDto): TDocumentDefinitions {
       emptyState: { italics: true, color: "#667085" },
     },
   };
+}
+
+type ReportMetric = {
+  label: string;
+  value: string | number;
+  color: string;
+};
+
+function reportCover(title: string, subtitle: string, description: string): Content {
+  return {
+    stack: [
+      { text: "DATABASE SCANNER POC", style: "eyebrow" },
+      { text: title, style: "title" },
+      { text: pdfText(subtitle), style: "subtitle" },
+      { text: description, style: "coverDescription" },
+      {
+        text: `Generated: ${formatPdfDate(new Date().toISOString())}`,
+        style: "documentMeta",
+      },
+    ],
+    margin: [0, 0, 0, 18],
+  };
+}
+
+function metricCards(metrics: ReportMetric[]): Content {
+  return {
+    columns: metrics.map((metric) => ({
+      width: "*",
+      table: {
+        widths: ["*"],
+        body: [[{
+          stack: [
+            { text: pdfText(metric.value), fontSize: 18, bold: true, color: metric.color },
+            { text: metric.label, fontSize: 7.5, color: "#475467", margin: [0, 3, 0, 0] },
+          ],
+          fillColor: "#F8FAFC",
+          margin: [8, 8, 8, 8],
+        }]],
+      },
+      layout: "noBorders",
+    })),
+    columnGap: 8,
+    margin: [0, 0, 0, 2],
+  };
+}
+
+function summaryTable(rows: Array<[string, unknown]>): Content {
+  return {
+    table: {
+      widths: [118, "*"],
+      body: rows.map(([label, value]) => [
+        { text: label, style: "summaryLabel", fillColor: "#F8FAFC" },
+        { text: pdfText(value), style: "summaryValue" },
+      ]),
+    },
+    layout: {
+      hLineColor: () => "#E4E7EC",
+      vLineColor: () => "#E4E7EC",
+      hLineWidth: () => 0.5,
+      vLineWidth: () => 0.5,
+      paddingLeft: () => 7,
+      paddingRight: () => 7,
+      paddingTop: () => 5,
+      paddingBottom: () => 5,
+    },
+    margin: [0, 0, 0, 18],
+  };
+}
+
+function discoveryResultBlock(result: DiscoveryResultDto, index: number, supported: boolean): Content {
+  const engineOrService = result.detectedEngine ?? result.detectedService;
+  const badgeColor = supported ? "#067647" : "#B54708";
+  const detailStack: Content[] = [
+    {
+      columns: [
+        {
+          text: `${index + 1}. ${pdfText(engineOrService)} - ${pdfText(result.host)}:${result.port}`,
+          style: "resultTitle",
+          width: "*",
+        },
+        {
+          text: supported ? "SUPPORTED" : "INFORMATIONAL",
+          style: "resultBadge",
+          color: badgeColor,
+          width: "auto",
+        },
+      ],
+      columnGap: 12,
+    },
+    {
+      text: `Confidence: ${result.confidence}%  |  Fingerprint: ${pdfText(result.fingerprintLevel)}  |  Environment: ${pdfText(result.environment)}`,
+      style: "resultMeta",
+    },
+    {
+      text: `Status: ${pdfText(result.status)}  |  Target state: ${pdfText(result.targetState)}  |  Add as target: ${result.canAddAsTarget ? "Yes" : "No"}`,
+      style: "resultMeta",
+      margin: [0, 0, 0, 7],
+    },
+    { text: supported ? "Verification / reason" : "Why this service is not targetable", style: "fieldLabel" },
+    { text: pdfText(result.reason), style: "body" },
+  ];
+
+  return reportDetailBlock(detailStack);
+}
+
+function reportDetailBlock(stack: Content[]): Content {
+  return {
+    table: {
+      widths: [4, "*"],
+      dontBreakRows: true,
+      body: [[
+        { text: "", fillColor: "#6172F3" },
+        { stack, fillColor: "#F8FAFC", margin: [10, 8, 10, 9] },
+      ]],
+    },
+    layout: "noBorders",
+    margin: [0, 0, 0, 10],
+  };
+}
+
+function emptyReportState(text: string): Content {
+  return {
+    text,
+    style: "emptyState",
+    fillColor: "#F8FAFC",
+    margin: [10, 8, 10, 16],
+  };
+}
+
+function executiveDocument(
+  title: string,
+  subject: string,
+  content: Content[],
+  footerLabel: string,
+): TDocumentDefinitions {
+  return {
+    info: {
+      title,
+      author: "Database Scanner POC",
+      subject,
+    },
+    pageSize: "A4",
+    pageMargins: [42, 46, 42, 44],
+    content,
+    footer: (currentPage, pageCount) => ({
+      columns: [
+        { text: `Database Scanner POC - ${footerLabel}`, alignment: "left" },
+        { text: `Page ${currentPage} / ${pageCount}`, alignment: "right" },
+      ],
+      color: "#667085",
+      fontSize: 8,
+      margin: [42, 13, 42, 0],
+    }),
+    defaultStyle: {
+      font: "Roboto",
+      fontSize: 9,
+      color: "#182230",
+      lineHeight: 1.25,
+    },
+    styles: {
+      eyebrow: { fontSize: 8, bold: true, color: "#3448C5", characterSpacing: 0.8 },
+      title: { fontSize: 25, bold: true, color: "#101828", margin: [0, 5, 0, 3] },
+      subtitle: { fontSize: 10, color: "#475467", margin: [0, 0, 0, 7] },
+      coverDescription: { fontSize: 9, color: "#344054", margin: [0, 0, 0, 3] },
+      documentMeta: { fontSize: 8, color: "#667085" },
+      lead: { fontSize: 10, color: "#344054", lineHeight: 1.35 },
+      sectionHeading: { fontSize: 14, bold: true, color: "#101828", margin: [0, 7, 0, 8] },
+      summaryLabel: { bold: true, color: "#344054" },
+      summaryValue: { color: "#182230" },
+      resultTitle: { fontSize: 10.5, bold: true, color: "#101828" },
+      resultBadge: { fontSize: 7.5, bold: true, alignment: "right", margin: [6, 1, 0, 0] },
+      resultMeta: { fontSize: 8, color: "#667085", margin: [0, 4, 0, 0] },
+      fieldLabel: { fontSize: 8, bold: true, color: "#344054", margin: [0, 1, 0, 2] },
+      body: { fontSize: 9, color: "#344054" },
+      evidence: { fontSize: 8.5, color: "#344054", fillColor: "#FFFFFF", margin: [7, 6, 7, 6] },
+      emptyState: { italics: true, color: "#667085" },
+      noteList: { fontSize: 8.5, color: "#475467", lineHeight: 1.3 },
+    },
+  };
+}
+
+function discoveryExecutiveSummary(job: DiscoveryJobDto, confirmedCount: number) {
+  const total = job.supportedDatabases.length + job.unsupportedDatabases.length;
+  if (total === 0) {
+    return "The discovery job completed without recording a reachable database candidate or informational service.";
+  }
+
+  return `${total} reachable service result(s) were recorded in the selected scope. ${job.supportedDatabases.length} result(s) are supported and targetable; ${job.unsupportedDatabases.length} are informational or unsupported. ${confirmedCount} result(s) passed a confirmed database protocol fingerprint.`;
+}
+
+function findingsExecutiveSummary(
+  total: number,
+  openCount: number,
+  uniqueTargets: number,
+  counts: { critical: number; high: number; medium: number; low: number; info: number },
+) {
+  if (total === 0) {
+    return "No findings were available in the exported snapshot. This does not replace periodic scanning or target coverage review.";
+  }
+
+  const priority = counts.critical > 0
+    ? `Immediate attention is recommended for ${counts.critical} Critical finding(s).`
+    : counts.high > 0
+      ? `${counts.high} High finding(s) should be prioritized.`
+      : "No Critical or High finding is present in this snapshot.";
+
+  return `${total} finding(s) affect ${uniqueTargets} target(s), with ${openCount} currently open. ${priority}`;
+}
+
+function countSeverity(findings: FindingListItemDto[], severity: string) {
+  return findings.filter((finding) => finding.severity.toLowerCase() === severity).length;
+}
+
+function severityRank(severity: string) {
+  switch (severity.toLowerCase()) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 function sectionHeading(text: string): Content {

@@ -5,6 +5,23 @@
 
 # dotenv files
 .env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local/private artifacts: never publish documents, signatures or UI captures.
+/.tmp-staj/
+/deliverables/
+/tmp/
+/output/
+/ops/observability/*.local.json
+
+# Local secrets and database backups (public certificates are not private keys).
+secrets.json
+*.key
+*.pem
+*.dump
+*.backup
 
 # User-specific files
 *.rsuser

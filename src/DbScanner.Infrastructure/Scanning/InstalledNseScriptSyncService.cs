@@ -107,6 +107,7 @@ public sealed class InstalledNseScriptSyncService(
                     var script = new NseScript
                     {
                         Id = scriptName,
+                        ExecutorType = ScanExecutorTypes.NmapNse,
                         NseScriptName = scriptName,
                         DisplayName = ToDisplayName(scriptName),
                         Description = metadata.Description,
@@ -203,6 +204,10 @@ public sealed class InstalledNseScriptSyncService(
         IReadOnlyList<string> supportedEngines)
     {
         var changed = false;
+        changed |= SetNullableIfChanged(
+            script.ExecutorType,
+            ScanExecutorTypes.NmapNse,
+            value => script.ExecutorType = value);
         changed |= SetIfChanged(script.NseScriptName, scriptName, value => script.NseScriptName = value);
         changed |= SetIfChanged(script.DisplayName, ToDisplayName(scriptName), value => script.DisplayName = value);
         changed |= SetIfChanged(script.Description, metadata.Description, value => script.Description = value);

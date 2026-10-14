@@ -16,6 +16,10 @@ public sealed class Scan
     public DateTimeOffset? FinishedAt { get; set; }
     public DateTimeOffset? TimeoutAt { get; set; }
     public string? ErrorMessage { get; set; }
+    public Guid? LeaseToken { get; set; }
+    public DateTimeOffset? LeaseExpiresAt { get; set; }
+    public DateTimeOffset? LastHeartbeatAt { get; set; }
+    public int ExecutionAttempt { get; set; }
 
     public ICollection<ScanScriptResult> ScriptResults { get; } = new List<ScanScriptResult>();
     public ICollection<Finding> Findings { get; } = new List<Finding>();

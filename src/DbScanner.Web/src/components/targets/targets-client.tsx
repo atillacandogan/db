@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { ScanStatusBadge } from "@/components/feedback/scan-status-badge";
 import { ScopeBoundaryNote } from "@/components/security/scope-boundary-note";
 import { DiscoveryPanel } from "@/components/targets/discovery-panel";
+import { useAuth } from "@/components/providers/auth-provider";
 import { createScan } from "@/lib/api/scans";
-import { getNseScripts } from "@/lib/api/nse-scripts";
+import { getScanChecks } from "@/lib/api/scan-checks";
 import {
   createTarget,
   deleteTarget,
@@ -138,6 +139,10 @@ function formatCreateTargetError(error: Error) {
 
 export function TargetsClient() {
   const queryClient = useQueryClient();
+  const { can } = useAuth();
+  const canCreateTargets = can("deleteResources"); // inventory creation/discovery is organization-admin only
+  const canOperateScans = can("operateScans");
+  const canDeleteResources = can("deleteResources");
   const [formState, setFormState] = useState<FormState>(initialFormState);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -151,8 +156,8 @@ export function TargetsClient() {
   });
 
   const nseScriptsQuery = useQuery({
-    queryKey: ["nse-scripts"],
-    queryFn: getNseScripts,
+    queryKey: ["scan-checks"],
+    queryFn: getScanChecks,
   });
 
   useEffect(() => {
@@ -321,8 +326,9 @@ export function TargetsClient() {
 
       <ScopeBoundaryNote />
 
-      <DiscoveryPanel />
+      {canCreateTargets ? <DiscoveryPanel /> : null}
 
+      {canCreateTargets ? (
       <section className="placeholder">
         <p className="detail-label">Yeni Target</p>
         <form className="form-grid target-form-grid" onSubmit={handleSubmit}>
@@ -497,6 +503,7 @@ export function TargetsClient() {
         </form>
 
       </section>
+      ) : null}
 
       <section id="registered-targets" className="placeholder">
         <div className="targets-section-heading">
@@ -531,7 +538,7 @@ export function TargetsClient() {
               <div className="targets-grid__header" aria-hidden="true">
                 <span>Target Info</span>
                 <span>Engine / Environment</span>
-                <span>NSE Scripts</span>
+                <span>Scan Checks</span>
                 <span>Status</span>
                 <span>Actions</span>
               </div>
@@ -568,9 +575,9 @@ export function TargetsClient() {
                     </div>
 
                     <div className="target-card__scripts target-card__cell">
-                      <span className="target-card__cell-label">NSE Scripts</span>
+                      <span className="target-card__cell-label">Scan Checks</span>
                       <strong>{selectedScriptIds.length}</strong>
-                      <span className="muted">scripts selected</span>
+                      <span className="muted">checks selected</span>
                       {nseScriptsQuery.isLoading ? <span className="muted">Yukleniyor...</span> : null}
                       {nseScriptsQuery.isError ? <span className="feedback-error">Alinamadi</span> : null}
                     </div>
@@ -586,13 +593,15 @@ export function TargetsClient() {
                     <div className="target-card__actions target-card__cell">
                       <span className="target-card__cell-label">Actions</span>
                       <div className="target-card__action-buttons">
+                        {canOperateScans && ((target.permissions ?? 0) & 2) !== 0 ? (
+                          <>
                         <Button
                           className="button button--secondary"
                           type="button"
                           disabled={nseScriptsQuery.isLoading || nseScriptsQuery.isError}
                           onClick={() => setScriptPickerTargetId(target.id)}
                         >
-                          Select NSE Scripts
+                          Select Scan Checks
                         </Button>
                         <Button
                           type="button"
@@ -602,7 +611,7 @@ export function TargetsClient() {
                             setError(null);
                             createScanMutation.mutate({
                               targetId: target.id,
-                              selectedNseScriptIds: selectedScriptIds,
+                              selectedCheckIds: selectedScriptIds,
                             });
                           }}
                         >
@@ -613,6 +622,9 @@ export function TargetsClient() {
                             </>
                           ) : "Scan Başlat"}
                         </Button>
+                          </>
+                        ) : null}
+                        {canDeleteResources ? (
                         <Button
                           className="button button--danger"
                           type="button"
@@ -625,6 +637,8 @@ export function TargetsClient() {
                         >
                           Sil
                         </Button>
+                        ) : null}
+                        {(!canOperateScans || ((target.permissions ?? 0) & 2) === 0) && !canDeleteResources ? <span className="muted">Salt okunur</span> : null}
                       </div>
                     </div>
                   </div>
@@ -676,7 +690,7 @@ export function TargetsClient() {
           onCancel={() => setScriptPickerTargetId(null)}
           onApply={(scriptIds) => {
             setScriptSelections((current) => ({ ...current, [scriptPickerTarget.id]: scriptIds }));
-            setFeedback("NSE script seçimi kaydedildi.");
+            setFeedback("Scan check seçimi kaydedildi.");
             setError(null);
             setScriptPickerTargetId(null);
           }}
@@ -798,7 +812,7 @@ function NseScriptSelectionModal({
       <section className="modal-panel modal-panel--script-picker" role="dialog" aria-modal="true" aria-labelledby="nse-script-picker-title">
         <div className="modal-panel__header">
           <div>
-            <p className="detail-label" id="nse-script-picker-title">Select NSE Scripts</p>
+            <p className="detail-label" id="nse-script-picker-title">Select Scan Checks</p>
             <p className="muted">{target.name} / {selectedScriptIds.length} scripts selected</p>
           </div>
         </div>
@@ -844,7 +858,7 @@ function NseScriptSelectionModal({
         <div className="nse-selection-table">
           <div className="nse-selection-table__header" aria-hidden="true">
             <span />
-            <span>Script Name</span>
+            <span>Scan Check</span>
             <span>File Name</span>
             <span>Categories</span>
             <span>Description</span>

@@ -1,0 +1,25 @@
+namespace DbScanner.Contracts.ScanChecks;
+
+public sealed record ScanCheckDto(
+    string Id,
+    string Name,
+    string DisplayName,
+    string Description,
+    string ExecutorType,
+    IReadOnlyList<string> SupportedEngines,
+    string? Categories,
+    bool DefaultEnabled,
+    bool RequiresCredentials,
+    bool IsIntrusive,
+    string? ConfigurationSchema,
+    string ParserType,
+    string MatcherType,
+    string MatcherExpression,
+    string Severity,
+    int Weight,
+    string? RemediationTemplate,
+    string? DocumentationUrl,
+    string ApprovalStatus,
+    string Source,
+    bool? IsInstalled,
+    bool CanDelete);

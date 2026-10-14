@@ -1,3 +1,4 @@
+using DbScanner.Application.Models;
 using DbScanner.Contracts.Scans;
 using DbScanner.Domain.Entities;
 using DbScanner.Domain.Enums;
@@ -45,13 +46,16 @@ public static class ScanMappings
                 .OrderBy(result => result.CreatedAt)
                 .Select(result => new ScanScriptResultDto(
                     result.Id,
-                    result.NseScriptId,
                     result.ScriptName,
                     result.RawXml,
                     result.NormalizedOutput,
                     result.ExitCode,
                     result.ResultStatus is null ? null : ToContractProbeStatus(result.ResultStatus.Value),
-                    result.CreatedAt))
+                    result.CreatedAt,
+                    ScanCheckIdCompatibility.Resolve(
+                        result.ScanCheckId,
+                        result.NseScriptId,
+                        "scan-response")))
                 .ToArray(),
             scan.Findings
                 .OrderByDescending(finding => finding.ScoreContribution)

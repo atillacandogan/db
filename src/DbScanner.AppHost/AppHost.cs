@@ -1,7 +1,16 @@
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 
 var builder = DistributedApplication.CreateBuilder(args);
+
+if (builder.Configuration.GetValue<bool>("TenantIsolation:DedicatedTenant"))
+    throw new InvalidOperationException("The demo AppHost is single-organization only. Deploy a separate API/worker, database login and RabbitMQ vhost per dedicated tenant; see docs/architecture/resource-access-and-tenancy.md.");
+
+var compatibilityOtlpHostEndpoint =
+    builder.Configuration["Telemetry:CompatibilityOtlpHostEndpoint"];
+var compatibilityOtlpContainerEndpoint =
+    builder.Configuration["Telemetry:CompatibilityOtlpContainerEndpoint"];
 
 const string MsSqlImage = "mcr.microsoft.com/mssql/server";
 const string MsSqlImageTag = "2022-CU22-GDR1-ubuntu-22.04";
@@ -43,11 +52,19 @@ var keycloakDatabase = keycloakPostgres.AddDatabase(
     databaseName: "keycloak");
 
 var keycloakAdminPassword = builder.AddParameter("keycloak-admin-password", secret: true);
+var dbscannerInitialAdminPassword = builder.AddParameter("dbscanner-initial-admin-password", secret: true);
+var keycloakAdminServiceClientSecret = builder.AddParameter(
+    "keycloak-admin-service-client-secret",
+    secret: true);
 var keycloak = builder
     .AddContainer("keycloak", KeycloakImage, KeycloakImageTag)
     .WithLifetime(ContainerLifetime.Persistent)
     .WithEnvironment("KC_BOOTSTRAP_ADMIN_USERNAME", "admin")
     .WithEnvironment("KC_BOOTSTRAP_ADMIN_PASSWORD", keycloakAdminPassword)
+    .WithEnvironment("DBSCANNER_INITIAL_ADMIN_PASSWORD", dbscannerInitialAdminPassword)
+    .WithEnvironment(
+        "DBSCANNER_ADMIN_SERVICE_CLIENT_SECRET",
+        keycloakAdminServiceClientSecret)
     .WithEnvironment("KC_DB", "postgres")
     .WithEnvironment(
         "KC_DB_URL",
@@ -68,7 +85,7 @@ var keycloak = builder
     .WithReference(keycloakDatabase)
     .WaitFor(keycloakDatabase);
 
-var demoPostgresPassword = builder.AddParameter("demo-postgres-password", "dbscanner", secret: true);
+var demoPostgresPassword = builder.AddParameter("demo-postgres-password", secret: true);
 var demoPostgresTarget = builder
     .AddContainer("demo-postgres-target", "postgres", "16")
     .WithEnvironment("POSTGRES_USER", "dbscanner")
@@ -76,7 +93,7 @@ var demoPostgresTarget = builder
     .WithEnvironment("POSTGRES_DB", "demo")
     .WithEndpoint(targetPort: 5432, port: 15432, scheme: "tcp", name: "postgres");
 
-var demoMySqlPassword = builder.AddParameter("demo-mysql-password", "dbscanner", secret: true);
+var demoMySqlPassword = builder.AddParameter("demo-mysql-password", secret: true);
 var demoMySqlTarget = builder
     .AddContainer("demo-mysql-target", "mysql", "8.4")
     .WithEnvironment("MYSQL_ROOT_PASSWORD", demoMySqlPassword)
@@ -87,9 +104,15 @@ var demoMySqlTarget = builder
         isReadOnly: true)
     .WithEndpoint(targetPort: 3306, port: 13306, scheme: "tcp", name: "mysql");
 
+var demoMySqlOnPostgresPortTarget = builder
+    .AddContainer("demo-mysql-on-postgres-port-target", "mysql", "8.4")
+    .WithEnvironment("MYSQL_ROOT_PASSWORD", demoMySqlPassword)
+    .WithEnvironment("MYSQL_DATABASE", "cross_port_demo")
+    .WithArgs("--port=5432")
+    .WithEndpoint(targetPort: 5432, port: 15433, scheme: "tcp", name: "mysql-cross-port");
+
 var demoMySqlSecurePassword = builder.AddParameter(
     "demo-mysql-secure-password",
-    "SecureTest_2026!",
     secret: true);
 var demoMySqlSecureTarget = builder
     .AddContainer("demo-mysql-secure-target", "mysql", "8.4")
@@ -190,14 +213,29 @@ var api = builder
     .WithEnvironment("Authentication__Authority", "http://localhost:18080/realms/dbscanner")
     .WithEnvironment("Authentication__Audience", "dbscanner-api")
     .WithEnvironment("Authentication__RequireHttpsMetadata", "false")
+    .WithEnvironment("KeycloakAdmin__BaseUrl", "http://localhost:18080")
+    .WithEnvironment("KeycloakAdmin__Realm", "dbscanner")
+    .WithEnvironment("KeycloakAdmin__ClientId", "dbscanner-admin-service")
+    .WithEnvironment("KeycloakAdmin__ClientSecret", keycloakAdminServiceClientSecret)
+    .WithEnvironment("KeycloakAdmin__WebClientId", "dbscanner-web")
+    .WithEnvironment("KeycloakAdmin__WebRedirectUri", "http://localhost:3000")
     .WithEnvironment("Discovery__MaxCidrHosts", "512")
     .WithEnvironment("CredentialProtection__Key", scannerCredentialProtectionKey)
+    .WithEnvironment("Telemetry__Environment", "local")
+    .WithOtlpExporter()
     .WaitFor(applicationDatabase)
     .WaitFor(rabbitMq)
     .WaitFor(keycloak)
     .WaitForCompletion(demoMsSqlInit);
 
-builder
+if (!string.IsNullOrWhiteSpace(compatibilityOtlpHostEndpoint))
+{
+    api.WithEnvironment(
+        "Telemetry__CompatibilityOtlpEndpoint",
+        compatibilityOtlpHostEndpoint);
+}
+
+var scannerWorker = builder
     .AddDockerfile("scanner-worker", "../..", "src/DbScanner.ScannerWorker/Dockerfile")
     .WithReference(applicationDatabase)
     .WithReference(rabbitMq)
@@ -214,15 +252,25 @@ builder
     .WithEnvironment("Discovery__MaxPortsPerTarget", "16")
     .WithEnvironment("Discovery__MaxBannerBytes", "512")
     .WithEnvironment("CredentialProtection__Key", scannerCredentialProtectionKey)
+    .WithEnvironment("Telemetry__Environment", "local")
+    .WithOtlpExporter()
     .WaitFor(applicationDatabase)
     .WaitFor(rabbitMq)
     .WaitFor(demoPostgresTarget)
     .WaitFor(demoMySqlTarget)
+    .WaitFor(demoMySqlOnPostgresPortTarget)
     .WaitFor(demoMySqlSecureTarget)
     .WaitFor(demoMySqlRootEmptyTarget)
     .WaitFor(demoRedisUnsupportedTarget)
     .WaitForCompletion(demoMsSqlInit)
     .WaitFor(demoOracleTarget);
+
+if (!string.IsNullOrWhiteSpace(compatibilityOtlpContainerEndpoint))
+{
+    scannerWorker.WithEnvironment(
+        "Telemetry__CompatibilityOtlpEndpoint",
+        compatibilityOtlpContainerEndpoint);
+}
 
 builder
     .AddExecutable("web", "npm", "../DbScanner.Web", "run", "dev", "--", "--hostname", "0.0.0.0")
@@ -234,6 +282,7 @@ builder
     .WaitFor(keycloak)
     .WaitFor(demoPostgresTarget)
     .WaitFor(demoMySqlTarget)
+    .WaitFor(demoMySqlOnPostgresPortTarget)
     .WaitFor(demoMySqlSecureTarget)
     .WaitFor(demoMySqlRootEmptyTarget)
     .WaitForCompletion(demoMsSqlInit)

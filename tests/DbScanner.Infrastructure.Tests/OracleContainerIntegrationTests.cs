@@ -11,6 +11,7 @@ using Xunit;
 
 namespace DbScanner.Infrastructure.Tests;
 
+[Collection(DatabaseContainerTestCollection.Name)]
 public sealed class OracleContainerIntegrationTests
 {
     private const string Image = "gvenzl/oracle-free:23.26.1-slim";
@@ -95,6 +96,21 @@ public sealed class OracleContainerIntegrationTests
             scannerPassword,
             string.Join(Environment.NewLine, results.Select(result => result.NormalizedOutput)),
             StringComparison.Ordinal);
+
+        var strategy = new OracleNativeScanExecutorStrategy(probe);
+        var stableChecks = new[]
+        {
+            CreateScript(OracleProbeScripts.Version),
+            CreateScript(OracleProbeScripts.SessionPrivileges)
+        };
+        var strategyResult = await strategy.ExecuteAsync(
+            new ScanExecutionContext(new Scan { TargetId = target.Id, Target = target },
+                target, authentication),
+            stableChecks.Select(script => script.ToScanCheckDefinition(ScanExecutorTypes.OracleNative)).ToArray());
+        Assert.Equal(
+            results.Where(result => stableChecks.Any(check => check.NseScriptName == result.ScriptName))
+                .Select(result => (result.ScriptName, result.NormalizedOutput, result.ResultStatus, (int?)result.ExitCode)),
+            strategyResult.CheckResults.Select(result => (result.CheckName, result.NormalizedOutput, result.ResultStatus, result.ExitCode)));
 
         var rejected = await probe.RunAsync(
             target,

@@ -28,7 +28,7 @@ public sealed class InstalledNseScriptSyncServiceTests
             var dbOptions = new DbContextOptionsBuilder<DbScannerDbContext>()
                 .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
                 .Options;
-            await using var dbContext = new DbScannerDbContext(dbOptions);
+            await using var dbContext = new DbScannerDbContext(dbOptions, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
             var repository = new NseScriptRepository(dbContext);
             var service = new InstalledNseScriptSyncService(
                 repository,
@@ -77,7 +77,7 @@ public sealed class InstalledNseScriptSyncServiceTests
             var dbOptions = new DbContextOptionsBuilder<DbScannerDbContext>()
                 .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
                 .Options;
-            await using (var arrangeContext = new DbScannerDbContext(dbOptions))
+            await using (var arrangeContext = new DbScannerDbContext(dbOptions, DbScanner.Application.Models.ResourceAccessContext.ForSystem()))
             {
                 arrangeContext.NseScripts.AddRange(
                     CreateScript("banner", NseScriptSource.Installed, "Stale description", true),
@@ -86,7 +86,7 @@ public sealed class InstalledNseScriptSyncServiceTests
                 await arrangeContext.SaveChangesAsync();
             }
 
-            await using var syncContext = new DbScannerDbContext(dbOptions);
+            await using var syncContext = new DbScannerDbContext(dbOptions, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
             var repository = new NseScriptRepository(syncContext);
             var service = new InstalledNseScriptSyncService(
                 repository,
@@ -134,7 +134,7 @@ public sealed class InstalledNseScriptSyncServiceTests
             var dbOptions = new DbContextOptionsBuilder<DbScannerDbContext>()
                 .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
                 .Options;
-            await using var dbContext = new DbScannerDbContext(dbOptions);
+            await using var dbContext = new DbScannerDbContext(dbOptions, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
             dbContext.NseScripts.Add(CreateScript("banner", NseScriptSource.Installed, "Banner", true));
             await dbContext.SaveChangesAsync();
 
@@ -174,7 +174,7 @@ public sealed class InstalledNseScriptSyncServiceTests
             var dbOptions = new DbContextOptionsBuilder<DbScannerDbContext>()
                 .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
                 .Options;
-            await using var dbContext = new DbScannerDbContext(dbOptions);
+            await using var dbContext = new DbScannerDbContext(dbOptions, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
             dbContext.NseScripts.Add(CreateScript("broken", NseScriptSource.Installed, "Existing", true));
             await dbContext.SaveChangesAsync();
 
@@ -218,7 +218,7 @@ public sealed class InstalledNseScriptSyncServiceTests
             var dbOptions = new DbContextOptionsBuilder<DbScannerDbContext>()
                 .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
                 .Options;
-            await using var dbContext = new DbScannerDbContext(dbOptions);
+            await using var dbContext = new DbScannerDbContext(dbOptions, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
             var repository = new NseScriptRepository(dbContext);
             var service = new InstalledNseScriptSyncService(
                 repository,
@@ -258,7 +258,7 @@ public sealed class InstalledNseScriptSyncServiceTests
             var dbOptions = new DbContextOptionsBuilder<DbScannerDbContext>()
                 .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
                 .Options;
-            await using var dbContext = new DbScannerDbContext(dbOptions);
+            await using var dbContext = new DbScannerDbContext(dbOptions, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
             var repository = new NseScriptRepository(dbContext);
             var service = new InstalledNseScriptSyncService(
                 repository,

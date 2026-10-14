@@ -8,6 +8,7 @@ public sealed class ScanScriptResult
     public Guid ScanId { get; set; }
     public Scan? Scan { get; set; }
     public string? NseScriptId { get; set; }
+    public string? ScanCheckId { get; set; }
     public NseScript? NseScript { get; set; }
     public required string ScriptName { get; set; }
     public string? RawXml { get; set; }

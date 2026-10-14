@@ -1,4 +1,5 @@
 using DbScanner.Application.Ports;
+using DbScanner.Application.Models;
 using DbScanner.Domain.Entities;
 using DbScanner.Domain.Enums;
 using DbScanner.Infrastructure.Persistence;
@@ -6,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace DbScanner.Infrastructure.Repositories;
 
-public sealed class ScanRepository(DbScannerDbContext dbContext) : IScanRepository
+public sealed class ScanRepository(DbScannerDbContext dbContext, ScanExecutionLeaseContext? leaseContext = null) : IScanRepository
 {
     private static readonly ScanStatus[] ActiveStatuses = [ScanStatus.Pending, ScanStatus.Scanning];
 
@@ -80,6 +81,11 @@ public sealed class ScanRepository(DbScannerDbContext dbContext) : IScanReposito
         string? errorMessage = null,
         CancellationToken cancellationToken = default)
     {
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        // Lock/fence the scan before deleting or inserting evidence. A cancelled or
+        // superseded execution must never replace another attempt's results.
+        await UpdateStatusAsync(scanId, status, errorMessage, cancellationToken);
+
         await dbContext.ScanScriptResults
             .Where(result => result.ScanId == scanId)
             .ExecuteDeleteAsync(cancellationToken);
@@ -113,6 +119,9 @@ public sealed class ScanRepository(DbScannerDbContext dbContext) : IScanReposito
         {
             throw new InvalidOperationException($"Scan {scanId} was not found while storing execution artifacts.");
         }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task UpdateStatusAsync(
@@ -129,11 +138,24 @@ public sealed class ScanRepository(DbScannerDbContext dbContext) : IScanReposito
             status == ScanStatus.Timeout ||
             status == ScanStatus.Cancelled;
 
-        await dbContext.Scans
-            .Where(scan => scan.Id == scanId)
+        var query = dbContext.Scans.Where(scan => scan.Id == scanId);
+        if (status == ScanStatus.Cancelled && leaseContext?.Token is null)
+            query = query.Where(scan => scan.Status == ScanStatus.Pending || scan.Status == ScanStatus.Scanning);
+        if (leaseContext?.Token is Guid token)
+        {
+            if (leaseContext.ScanId != scanId) throw new ScanLeaseLostException(scanId);
+            var now = await dbContext.Database.SqlQuery<DateTimeOffset>($"SELECT clock_timestamp() AS \"Value\"")
+                .SingleAsync(cancellationToken);
+            query = query.Where(scan => scan.Status == ScanStatus.Scanning
+                && scan.LeaseToken == token && scan.LeaseExpiresAt > now);
+        }
+
+        var affected = await query
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(scan => scan.Status, status)
                 .SetProperty(scan => scan.ErrorMessage, errorMessage)
+                .SetProperty(scan => scan.LeaseToken, scan => shouldSetFinishedAt ? null : scan.LeaseToken)
+                .SetProperty(scan => scan.LeaseExpiresAt, scan => shouldSetFinishedAt ? null : scan.LeaseExpiresAt)
                 .SetProperty(
                     scan => scan.StartedAt,
                     scan => status == ScanStatus.Scanning ? scan.StartedAt ?? startedAt : scan.StartedAt)
@@ -143,6 +165,9 @@ public sealed class ScanRepository(DbScannerDbContext dbContext) : IScanReposito
                         ? scan.FinishedAt ?? finishedAt
                         : scan.FinishedAt),
                 cancellationToken);
+
+        if (leaseContext?.Token is not null && affected == 0)
+            throw new ScanLeaseLostException(scanId);
     }
 
     public void ClearTracking() =>

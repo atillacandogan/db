@@ -53,6 +53,11 @@ created=0
 preserved=0
 
 set_secret "Parameters:keycloak-admin-password" "$(new_demo_password)"
+set_secret "Parameters:dbscanner-initial-admin-password" "$(new_demo_password)"
+set_secret "Parameters:keycloak-admin-service-client-secret" "$(new_protection_key)"
+set_secret "Parameters:demo-postgres-password" "$(new_demo_password)"
+set_secret "Parameters:demo-mysql-password" "$(new_demo_password)"
+set_secret "Parameters:demo-mysql-secure-password" "$(new_demo_password)"
 set_secret "Parameters:demo-mssql-password" "$(new_demo_password)"
 set_secret "Parameters:demo-mssql-app-password" "$(new_demo_password)"
 set_secret "Parameters:demo-mssql-scanner-password" "$(new_demo_password)"

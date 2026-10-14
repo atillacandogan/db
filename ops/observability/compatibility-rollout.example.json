@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 3,
+  "environment": "staging",
+  "requiredDeploymentVersion": "stage-13",
+  "windowDays": 7,
+  "sampleStepMinutes": 5,
+  "preflightMinutes": 15,
+  "evidenceSigningKeyId": "dbscanner-staging-stage-13",
+  "expectedServices": [
+    {
+      "name": "DbScanner.Api",
+      "minimumInstances": 1
+    },
+    {
+      "name": "DbScanner.ScannerWorker",
+      "minimumInstances": 1
+    }
+  ]
+}

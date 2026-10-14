@@ -1,13 +1,21 @@
+using DbScanner.Application.Models;
 using DbScanner.Domain.Entities;
 using DbScanner.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace DbScanner.Infrastructure.Persistence;
 
-public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> options) : DbContext(options)
+public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> options,
+    ResourceAccessContext access) : DbContext(options)
 {
+    public DbSet<AccessProject> AccessProjects => Set<AccessProject>();
+    public DbSet<AccessTeam> AccessTeams => Set<AccessTeam>();
+    public DbSet<AccessTeamMember> AccessTeamMembers => Set<AccessTeamMember>();
+    public DbSet<AccessGrant> AccessGrants => Set<AccessGrant>();
+    public DbSet<ResourceAccessAudit> ResourceAccessAudits => Set<ResourceAccessAudit>();
     public DbSet<Target> Targets => Set<Target>();
     public DbSet<Scan> Scans => Set<Scan>();
+    public DbSet<ScanOutboxMessage> ScanOutboxMessages => Set<ScanOutboxMessage>();
     public DbSet<ScanScriptResult> ScanScriptResults => Set<ScanScriptResult>();
     public DbSet<Rule> Rules => Set<Rule>();
     public DbSet<RuleEngineSupport> RuleEngineSupport => Set<RuleEngineSupport>();
@@ -18,18 +26,130 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
     public DbSet<Finding> Findings => Set<Finding>();
     public DbSet<DiscoveryJob> DiscoveryJobs => Set<DiscoveryJob>();
     public DbSet<DiscoveredDatabase> DiscoveredDatabases => Set<DiscoveredDatabase>();
+    public DbSet<UserManagementAudit> UserManagementAudits => Set<UserManagementAudit>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureTargets(modelBuilder);
         ConfigureScans(modelBuilder);
+        ConfigureScanOutbox(modelBuilder);
         ConfigureScriptResults(modelBuilder);
         ConfigureRules(modelBuilder);
         ConfigureNseScripts(modelBuilder);
         ConfigureFindings(modelBuilder);
         ConfigureScope(modelBuilder);
         ConfigureDiscovery(modelBuilder);
+        ConfigureUserManagementAudit(modelBuilder);
         SeedData(modelBuilder);
+        ConfigureResourceAccess(modelBuilder);
+    }
+
+    private void ConfigureResourceAccess(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<DeploymentTenant>(entity =>
+        {
+            entity.ToTable("deployment_tenant", table => table.HasCheckConstraint("CK_deployment_tenant_singleton", "\"Id\" = 1"));
+            entity.Property(t => t.Id).ValueGeneratedNever();
+            entity.Property(t => t.TenantId).HasMaxLength(63).IsRequired();
+        });
+        modelBuilder.Entity<AccessProject>(entity =>
+        {
+            entity.ToTable("access_projects");
+            entity.Property(p => p.Name).HasMaxLength(160).IsRequired();
+            entity.HasData(new AccessProject { Id = AccessProject.DefaultId, Name = "Varsayılan proje" });
+        });
+        modelBuilder.Entity<AccessTeam>(entity =>
+        {
+            entity.ToTable("access_teams");
+            entity.Property(p => p.Name).HasMaxLength(160).IsRequired().IsConcurrencyToken();
+            entity.Property(p => p.IsArchived).IsConcurrencyToken();
+        });
+        modelBuilder.Entity<ResourceAccessAudit>(entity =>
+        {
+            entity.ToTable("resource_access_audits");
+            entity.Property(a => a.ActorSubject).HasMaxLength(256).IsRequired();
+            entity.Property(a => a.ActorUsername).HasMaxLength(256);
+            entity.Property(a => a.Action).HasMaxLength(64).IsRequired();
+            entity.Property(a => a.EntityType).HasMaxLength(32).IsRequired();
+            entity.Property(a => a.EntityId).HasMaxLength(256).IsRequired();
+            entity.Property(a => a.BeforeJson).HasColumnType("jsonb");
+            entity.Property(a => a.AfterJson).HasColumnType("jsonb");
+            entity.HasIndex(a => new { a.Timestamp, a.Id });
+            entity.HasIndex(a => new { a.TeamId, a.Timestamp });
+            entity.HasQueryFilter(a => access.IsSystem || access.IsAdministrator);
+        });
+        modelBuilder.Entity<AccessTeamMember>(entity =>
+        {
+            entity.ToTable("access_team_members");
+            entity.HasKey(m => new { m.TeamId, m.Subject });
+            entity.Property(m => m.Subject).HasMaxLength(256);
+            entity.HasOne<AccessTeam>().WithMany().HasForeignKey(m => m.TeamId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(m => m.Subject);
+        });
+        modelBuilder.Entity<Target>(entity =>
+        {
+            entity.Property(t => t.ProjectId).HasDefaultValue(AccessProject.DefaultId);
+            entity.HasOne<AccessProject>().WithMany().HasForeignKey(t => t.ProjectId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasAlternateKey(t => new { t.Id, t.ProjectId });
+            entity.HasQueryFilter(t => access.IsSystem || access.IsAdministrator ||
+                ((access.RolePermissions & access.RequiredPermission) == access.RequiredPermission
+                && AccessGrants.Any(g => g.ProjectId == t.ProjectId && (g.TargetId == null || g.TargetId == t.Id)
+                    && AccessTeams.Any(team => team.Id == g.TeamId && !team.IsArchived)
+                    && (g.Permissions & access.RequiredPermission) == access.RequiredPermission
+                    && AccessTeamMembers.Any(m => m.TeamId == g.TeamId && m.Subject == access.Subject))));
+        });
+        modelBuilder.Entity<AccessGrant>(entity =>
+        {
+            entity.ToTable("access_grants", table => table.HasCheckConstraint("CK_access_grants_permissions", "\"Permissions\" BETWEEN 1 AND 15"));
+            entity.HasOne<AccessTeam>().WithMany().HasForeignKey(g => g.TeamId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<AccessProject>().WithMany().HasForeignKey(g => g.ProjectId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Target>().WithMany().HasForeignKey(g => new { g.TargetId, g.ProjectId })
+                .HasPrincipalKey(t => new { t.Id, t.ProjectId }).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(g => new { g.TeamId, g.ProjectId, g.TargetId }).IsUnique().AreNullsDistinct(false);
+        });
+        // Query filters also cover reports and nested result navigation, not just target lists.
+        modelBuilder.Entity<Scan>().HasQueryFilter(s => access.IsSystem || Targets.Any(t => t.Id == s.TargetId));
+        modelBuilder.Entity<Finding>().HasQueryFilter(f => access.IsSystem || (Targets.Any(t => t.Id == f.TargetId)
+            && Scans.Any(s => s.Id == f.ScanId && s.TargetId == f.TargetId)));
+        modelBuilder.Entity<ScanScriptResult>().HasQueryFilter(r => access.IsSystem || Scans.Any(s => s.Id == r.ScanId));
+        modelBuilder.Entity<ScanOutboxMessage>().HasQueryFilter(o => access.IsSystem || Scans.Any(s => s.Id == o.ScanId));
+    }
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        GuardWrites();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        GuardWrites();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void GuardWrites()
+    {
+        ChangeTracker.DetectChanges();
+        if (ChangeTracker.Entries<ResourceAccessAudit>().Any(e => e.State is EntityState.Modified or EntityState.Deleted))
+            throw new InvalidOperationException("Authorization audit records are append-only.");
+        if (access.IsSystem || access.IsAdministrator) return;
+        ChangeTracker.DetectChanges();
+        foreach (var entry in ChangeTracker.Entries().Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted).ToArray())
+        {
+            var permitted = entry.Entity switch
+            {
+                Target target when entry.State != EntityState.Added =>
+                    access.RequiredPermission.HasFlag(TargetPermission.Manage) && Targets.Any(t => t.Id == target.Id)
+                    && !entry.Property(nameof(Target.ProjectId)).IsModified,
+                Scan scan when entry.State == EntityState.Added =>
+                    access.RequiredPermission.HasFlag(TargetPermission.Scan) && Targets.Any(t => t.Id == scan.TargetId),
+                ScanOutboxMessage message when entry.State == EntityState.Added =>
+                    access.RequiredPermission.HasFlag(TargetPermission.Scan)
+                    && ChangeTracker.Entries<Scan>().Any(s => s.State == EntityState.Added && s.Entity.Id == message.ScanId),
+                _ => false
+            };
+            if (!permitted) throw new UnauthorizedAccessException("Resource write was not authorized.");
+        }
     }
 
     private static void ConfigureTargets(ModelBuilder modelBuilder)
@@ -63,6 +183,22 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
                 .HasForeignKey(scan => scan.TargetId)
                 .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(scan => new { scan.TargetId, scan.Status });
+            entity.HasIndex(scan => new { scan.Status, scan.LeaseExpiresAt });
+        });
+    }
+
+    private static void ConfigureScanOutbox(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ScanOutboxMessage>(entity =>
+        {
+            entity.ToTable("scan_outbox_messages");
+            entity.HasKey(message => message.Id);
+            entity.Property(message => message.Payload).IsRequired();
+            entity.Property(message => message.LastErrorCode).HasMaxLength(64);
+            entity.HasIndex(message => message.ScanId).IsUnique();
+            entity.HasIndex(message => new { message.PublishedAt, message.AvailableAt });
+            entity.HasOne<Scan>().WithOne().HasForeignKey<ScanOutboxMessage>(message => message.ScanId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 
@@ -73,6 +209,8 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
             entity.ToTable("scan_script_results");
             entity.HasKey(result => result.Id);
             entity.Property(result => result.NseScriptId).HasMaxLength(128);
+            entity.Property(result => result.ScanCheckId).HasMaxLength(128);
+            entity.HasIndex(result => result.ScanCheckId);
             entity.Property(result => result.ScriptName).HasMaxLength(128).IsRequired();
             entity.Property(result => result.ResultStatus).HasConversion<string>().HasMaxLength(32);
             entity.HasOne(result => result.Scan)
@@ -124,6 +262,8 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
             entity.HasKey(mapping => new { mapping.RuleId, mapping.NseScriptId });
             entity.Property(mapping => mapping.RuleId).HasMaxLength(128);
             entity.Property(mapping => mapping.NseScriptId).HasMaxLength(128);
+            entity.Property(mapping => mapping.ScanCheckId).HasMaxLength(128);
+            entity.HasIndex(mapping => mapping.ScanCheckId);
             entity.HasOne(mapping => mapping.Rule)
                 .WithMany(rule => rule.RuleScripts)
                 .HasForeignKey(mapping => mapping.RuleId)
@@ -142,6 +282,7 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
             entity.ToTable("nse_scripts");
             entity.HasKey(script => script.Id);
             entity.Property(script => script.Id).HasMaxLength(128);
+            entity.Property(script => script.ExecutorType).HasMaxLength(64);
             entity.Property(script => script.NseScriptName).HasMaxLength(128).IsRequired();
             entity.Property(script => script.DisplayName).HasMaxLength(240).IsRequired();
             entity.Property(script => script.Description).HasMaxLength(2048).IsRequired();
@@ -271,6 +412,25 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
         });
     }
 
+    private static void ConfigureUserManagementAudit(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<UserManagementAudit>(entity =>
+        {
+            entity.ToTable("user_management_audits");
+            entity.HasKey(audit => audit.Id);
+            entity.Property(audit => audit.ActorSubject).HasMaxLength(128).IsRequired();
+            entity.Property(audit => audit.ActorUsername).HasMaxLength(128);
+            entity.Property(audit => audit.ActorEmail).HasMaxLength(320);
+            entity.Property(audit => audit.Action).HasMaxLength(64).IsRequired();
+            entity.Property(audit => audit.TargetUserId).HasMaxLength(128);
+            entity.Property(audit => audit.PreviousRole).HasMaxLength(64);
+            entity.Property(audit => audit.NewRole).HasMaxLength(64);
+            entity.Property(audit => audit.FailureCode).HasMaxLength(64);
+            entity.HasIndex(audit => audit.Timestamp);
+            entity.HasIndex(audit => new { audit.TargetUserId, audit.Timestamp });
+        });
+    }
+
     private static void SeedData(ModelBuilder modelBuilder)
     {
         var createdAt = new DateTimeOffset(2026, 4, 13, 0, 0, 0, TimeSpan.Zero);
@@ -339,6 +499,7 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
             new NseScript
             {
                 Id = "banner",
+                ExecutorType = ScanExecutorTypes.NmapNse,
                 NseScriptName = "banner",
                 DisplayName = "Banner",
                 Description = "Generic service banner collection.",
@@ -357,6 +518,7 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
             new NseScript
             {
                 Id = "mysql-info",
+                ExecutorType = ScanExecutorTypes.NmapNse,
                 NseScriptName = "mysql-info",
                 DisplayName = "MySQL Info",
                 Description = "Collects safe unauthenticated MySQL service metadata where available.",
@@ -440,10 +602,10 @@ public sealed class DbScannerDbContext(DbContextOptions<DbScannerDbContext> opti
             Support("3642e3b4-ea54-4a91-9731-ded6e7ee17c7", "mysql_service_detected", DatabaseEngine.MySql));
 
         modelBuilder.Entity<RuleNseScript>().HasData(
-            new RuleNseScript { RuleId = "generic_db_port_open", NseScriptId = "banner" },
-            new RuleNseScript { RuleId = "generic_service_fingerprint_detected", NseScriptId = "banner" },
-            new RuleNseScript { RuleId = "pg_service_detected", NseScriptId = "banner" },
-            new RuleNseScript { RuleId = "mysql_service_detected", NseScriptId = "mysql-info" });
+            new RuleNseScript { RuleId = "generic_db_port_open", NseScriptId = "banner", ScanCheckId = "banner" },
+            new RuleNseScript { RuleId = "generic_service_fingerprint_detected", NseScriptId = "banner", ScanCheckId = "banner" },
+            new RuleNseScript { RuleId = "pg_service_detected", NseScriptId = "banner", ScanCheckId = "banner" },
+            new RuleNseScript { RuleId = "mysql_service_detected", NseScriptId = "mysql-info", ScanCheckId = "mysql-info" });
 
         modelBuilder.Entity<NseScriptMatcher>().HasData(
             Matcher("b09ad4e0-e2f9-4ea4-aea0-6bf5d433d4d7", "banner", "generic_db_port_open", DatabaseEngine.Generic, "open"),

@@ -3,6 +3,7 @@ using System.Text.Json;
 using DbScanner.Application.Models;
 using DbScanner.Application.Ports;
 using DbScanner.Contracts.NseScripts;
+using DbScanner.Infrastructure.Identity;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
@@ -11,7 +12,8 @@ namespace DbScanner.Infrastructure.Messaging;
 
 internal sealed class RabbitMqNseScriptSyncRequester(
     RabbitMqConnectionFactory connectionFactory,
-    IOptions<RabbitMqOptions> options) : INseScriptSyncRequester
+    IOptions<RabbitMqOptions> options,
+    IOptions<TenantIsolationOptions> tenantOptions) : INseScriptSyncRequester
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -44,6 +46,8 @@ internal sealed class RabbitMqNseScriptSyncRequester(
             {
                 var response = JsonSerializer.Deserialize<NseScriptSyncResponseMessage>(args.Body.Span, JsonOptions)
                     ?? throw new InvalidOperationException("NSE script sync response was empty.");
+                if (!tenantOptions.Value.AcceptsMessage(response.TenantId))
+                    throw new InvalidOperationException("NSE sync response belongs to a different tenant.");
                 completion.TrySetResult(response);
             }
             catch (Exception exception)
@@ -60,7 +64,7 @@ internal sealed class RabbitMqNseScriptSyncRequester(
             consumer: consumer,
             cancellationToken: cancellationToken);
 
-        var request = new NseScriptSyncRequestedMessage(requestId);
+        var request = new NseScriptSyncRequestedMessage(requestId, tenantOptions.Value.TenantId);
         var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request, JsonOptions));
         var properties = new BasicProperties
         {

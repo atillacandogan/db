@@ -12,4 +12,5 @@ public sealed record UpdateRuleCommand(
     string MatcherExpression,
     string Remediation,
     IReadOnlyList<string> SupportedEngines,
-    IReadOnlyList<string> NseScripts);
+    IReadOnlyList<string>? NseScripts = null,
+    IReadOnlyList<string>? ScanChecks = null);

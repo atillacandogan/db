@@ -8,12 +8,12 @@ public interface IScanProcessingService
 
     Task ProcessAsync(
         Guid scanId,
-        IReadOnlyCollection<string>? selectedNseScriptIds,
+        IReadOnlyCollection<string>? selectedCheckIds,
         CancellationToken cancellationToken);
 
     Task ProcessAsync(
         Guid scanId,
-        IReadOnlyCollection<string>? selectedNseScriptIds,
+        IReadOnlyCollection<string>? selectedCheckIds,
         DatabaseAuthentication? authentication,
         CancellationToken cancellationToken);
 }

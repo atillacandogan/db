@@ -141,7 +141,7 @@ export function ScanQuickViewModal({ scanId, onClose }: ScanQuickViewModalProps)
             <section className="scan-quick-view__section">
               <div className="scan-quick-view__section-heading">
                 <div>
-                  <p className="detail-label">Executed NSE Scripts</p>
+                  <p className="detail-label">Executed Scan Checks</p>
                   <p className="muted">Script sonucu ve kisa cikti ozeti.</p>
                 </div>
                 <span className="targets-count">{scan.scriptResults.length} script</span>
@@ -150,7 +150,7 @@ export function ScanQuickViewModal({ scanId, onClose }: ScanQuickViewModalProps)
               {scan.scriptResults.length > 0 ? (
                 <div className="scan-quick-table scan-quick-scripts-table">
                   <div className="scan-quick-table__header">
-                    <span>Script Name</span>
+                    <span>Scan Check</span>
                     <span>Exit Code</span>
                     <span>Status</span>
                     <span>Short Summary</span>
@@ -160,7 +160,7 @@ export function ScanQuickViewModal({ scanId, onClose }: ScanQuickViewModalProps)
                   ))}
                 </div>
               ) : (
-                <div className="scan-quick-view__empty muted">No executed NSE scripts found.</div>
+                <div className="scan-quick-view__empty muted">No executed scan checks found.</div>
               )}
             </section>
           </div>
@@ -220,9 +220,9 @@ function ScriptSummaryRow({ result }: { result: ScanScriptResultDto }) {
 
   return (
     <article className="scan-quick-table__row">
-      <div className="scan-quick-table__cell scan-quick-table__cell--primary" data-label="Script Name">
+      <div className="scan-quick-table__cell scan-quick-table__cell--primary" data-label="Scan Check">
         <strong>{result.scriptName}</strong>
-        {result.nseScriptId ? <span className="muted">{result.nseScriptId}</span> : null}
+        {result.scanCheckId ? <span className="muted">{result.scanCheckId}</span> : null}
       </div>
       <div className="scan-quick-table__cell" data-label="Exit Code">
         <span className="catalog-pill">{exitCode ?? "-"}</span>

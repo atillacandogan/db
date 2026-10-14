@@ -1,0 +1,42 @@
+namespace DbScanner.Application.Models;
+
+public sealed record CreateScanCheckCommand(
+    string Id,
+    string Name,
+    string DisplayName,
+    string Description,
+    string ExecutorType,
+    IReadOnlyList<string> SupportedEngines,
+    string? Categories,
+    bool DefaultEnabled,
+    bool RequiresCredentials,
+    bool IsIntrusive,
+    string? ConfigurationSchema,
+    string ParserType,
+    string MatcherType,
+    string MatcherExpression,
+    string Severity,
+    int Weight,
+    string? RemediationTemplate,
+    string? DocumentationUrl,
+    string ApprovalStatus);
+
+public sealed record UpdateScanCheckCommand(
+    string Name,
+    string DisplayName,
+    string Description,
+    string ExecutorType,
+    IReadOnlyList<string> SupportedEngines,
+    string? Categories,
+    bool DefaultEnabled,
+    bool RequiresCredentials,
+    bool IsIntrusive,
+    string? ConfigurationSchema,
+    string ParserType,
+    string MatcherType,
+    string MatcherExpression,
+    string Severity,
+    int Weight,
+    string? RemediationTemplate,
+    string? DocumentationUrl,
+    string ApprovalStatus);

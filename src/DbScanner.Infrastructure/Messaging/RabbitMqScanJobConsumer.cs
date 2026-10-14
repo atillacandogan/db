@@ -1,8 +1,8 @@
-using System.Text;
 using System.Text.Json;
+using DbScanner.Application.Models;
 using DbScanner.Application.Ports;
 using DbScanner.Contracts.Scans;
-using DbScanner.Domain.Enums;
+using DbScanner.Infrastructure.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -16,182 +16,104 @@ internal sealed class RabbitMqScanJobConsumer(
     IServiceScopeFactory serviceScopeFactory,
     IOptions<RabbitMqOptions> options,
     IScanCredentialProtector credentialProtector,
+    ScanJobHeartbeat heartbeat,
+    IOptions<TenantIsolationOptions> tenantOptions,
     ILogger<RabbitMqScanJobConsumer> logger) : IScanJobConsumer
 {
-    private const string RetryCountHeader = "x-retry-count";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await connectionFactory.Create().CreateConnectionAsync(cancellationToken);
         await using var channel = await connection.CreateChannelAsync(cancellationToken: cancellationToken);
-
         await RabbitMqTopology.DeclareAsync(channel, options.Value, cancellationToken);
         await channel.BasicQosAsync(0, options.Value.PrefetchCount, false, cancellationToken);
-
         var consumer = new AsyncEventingBasicConsumer(channel);
-        consumer.ReceivedAsync += async (_, args) =>
-        {
-            await HandleMessageAsync(channel, args, cancellationToken);
-        };
-
-        await channel.BasicConsumeAsync(
-            queue: options.Value.RequestedQueue,
-            autoAck: false,
-            consumer: consumer,
-            cancellationToken: cancellationToken);
-
+        consumer.ReceivedAsync += (_, args) => HandleMessageAsync(channel, args, cancellationToken);
+        await channel.BasicConsumeAsync(queue: options.Value.RequestedQueue, autoAck: false,
+            consumer: consumer, cancellationToken: cancellationToken);
         logger.LogInformation("Scan job consumer started on queue {QueueName}", options.Value.RequestedQueue);
+        try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+    }
 
+    internal async Task HandleMessageAsync(IChannel channel, BasicDeliverEventArgs args,
+        CancellationToken cancellationToken)
+    {
+        ScanJobLease? lease = null;
         try
         {
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            var delivered = JsonSerializer.Deserialize<ScanRequestedMessage>(args.Body.Span, JsonOptions);
+            if (delivered is null || delivered.ScanId == Guid.Empty
+                || !tenantOptions.Value.AcceptsMessage(delivered.TenantId))
+            {
+                await channel.BasicRejectAsync(args.DeliveryTag, requeue: false, cancellationToken);
+                return;
+            }
+            using var scope = serviceScopeFactory.CreateScope();
+            lease = await scope.ServiceProvider.GetRequiredService<IScanJobLeaseStore>()
+                .TryAcquireAsync(delivered, cancellationToken);
+            if (lease is null)
+            {
+                // Terminal jobs and concurrent duplicate deliveries cannot execute.
+                await channel.BasicAckAsync(args.DeliveryTag, false, cancellationToken);
+                return;
+            }
+            var fence = scope.ServiceProvider.GetRequiredService<ScanExecutionLeaseContext>();
+            fence.ScanId = lease.ScanId;
+            fence.Token = lease.Token;
+            using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var heartbeatStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var heartbeatTask = heartbeat.RunAsync(lease, execution, heartbeatStop.Token);
+            try
+            {
+                // Always use the authoritative request snapshot, not a later delivery's payload.
+                var request = lease.Request;
+                if (!tenantOptions.Value.AcceptsMessage(request.TenantId))
+                    throw new InvalidOperationException("Durable request belongs to a different tenant.");
+                var authentication = string.IsNullOrWhiteSpace(request.ProtectedCredentials)
+                    ? null : credentialProtector.Unprotect(request.ProtectedCredentials);
+                await scope.ServiceProvider.GetRequiredService<IScanProcessingService>().ProcessAsync(
+                    lease.ScanId, ScanRequestedMessageCompatibility.ResolveSelection(request),
+                    authentication, execution.Token);
+                logger.LogInformation("Scan job {ScanId} attempt {Attempt} finished.", lease.ScanId, lease.Attempt);
+            }
+            finally
+            {
+                await heartbeatStop.CancelAsync();
+                await heartbeatTask;
+            }
+        }
+        catch (JsonException)
+        {
+            await channel.BasicRejectAsync(args.DeliveryTag, requeue: false, cancellationToken);
+            return;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            logger.LogInformation("Scan job consumer is stopping.");
-        }
-    }
-
-    private async Task HandleMessageAsync(
-        IChannel channel,
-        BasicDeliverEventArgs args,
-        CancellationToken cancellationToken)
-    {
-        ScanRequestedMessage? message = null;
-
-        try
-        {
-            message = JsonSerializer.Deserialize<ScanRequestedMessage>(args.Body.Span, JsonOptions);
-            if (message is null)
-            {
-                await PublishDeadLetterAsync(channel, args.Body.ToArray(), args, "Message body could not be deserialized.", cancellationToken);
-                await channel.BasicAckAsync(args.DeliveryTag, false, cancellationToken);
-                return;
-            }
-
-            using var scope = serviceScopeFactory.CreateScope();
-            var scanRepository = scope.ServiceProvider.GetRequiredService<IScanRepository>();
-            var scanProcessingService = scope.ServiceProvider.GetRequiredService<IScanProcessingService>();
-
-            var markedScanning = await scanRepository.TryMarkScanningAsync(message.ScanId, cancellationToken);
-
-            if (!markedScanning)
-            {
-                logger.LogInformation("Scan job {ScanId} was ignored because it is not pending.", message.ScanId);
-                await channel.BasicAckAsync(args.DeliveryTag, false, cancellationToken);
-                return;
-            }
-
-            var authentication = string.IsNullOrWhiteSpace(message.ProtectedCredentials)
-                ? null
-                : credentialProtector.Unprotect(message.ProtectedCredentials);
-
-            await scanProcessingService.ProcessAsync(
-                message.ScanId,
-                message.SelectedNseScriptIds,
-                authentication,
-                cancellationToken);
-
-            var processedScan = await scanRepository.GetByIdAsync(message.ScanId, cancellationToken);
-            logger.LogInformation(
-                "Scan job {ScanId} finished with status {Status}.",
-                message.ScanId,
-                processedScan?.Status ?? ScanStatus.Scanning);
-
-            await channel.BasicAckAsync(args.DeliveryTag, false, cancellationToken);
-        }
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            logger.LogError(exception, "Scan job processing failed.");
-
-            if (message is not null)
-            {
-                using var scope = serviceScopeFactory.CreateScope();
-                var scanRepository = scope.ServiceProvider.GetRequiredService<IScanRepository>();
-                await scanRepository.IncrementRetryCountAsync(message.ScanId, cancellationToken);
-                await scanRepository.SaveChangesAsync(cancellationToken);
-            }
-
-            await RetryOrDeadLetterAsync(channel, args, exception.Message, cancellationToken);
-            await channel.BasicAckAsync(args.DeliveryTag, false, cancellationToken);
-        }
-    }
-
-    private async Task RetryOrDeadLetterAsync(
-        IChannel channel,
-        BasicDeliverEventArgs args,
-        string errorMessage,
-        CancellationToken cancellationToken)
-    {
-        var retryCount = GetRetryCount(args.BasicProperties.Headers);
-        if (retryCount >= options.Value.MaxRetryCount)
-        {
-            await PublishDeadLetterAsync(channel, args.Body.ToArray(), args, errorMessage, cancellationToken);
+            // No ACK on shutdown. Broker redelivery and durable lease recovery remain available.
             return;
         }
-
-        var properties = CreateProperties(args, retryCount + 1, errorMessage);
-        await channel.BasicPublishAsync(
-            exchange: string.Empty,
-            routingKey: options.Value.RetryQueue,
-            mandatory: true,
-            basicProperties: properties,
-            body: args.Body,
-            cancellationToken: cancellationToken);
-    }
-
-    private async Task PublishDeadLetterAsync(
-        IChannel channel,
-        byte[] body,
-        BasicDeliverEventArgs args,
-        string errorMessage,
-        CancellationToken cancellationToken)
-    {
-        var properties = CreateProperties(args, GetRetryCount(args.BasicProperties.Headers), errorMessage);
-        await channel.BasicPublishAsync(
-            exchange: string.Empty,
-            routingKey: options.Value.DeadLetterQueue,
-            mandatory: true,
-            basicProperties: properties,
-            body: body,
-            cancellationToken: cancellationToken);
-    }
-
-    private static BasicProperties CreateProperties(
-        BasicDeliverEventArgs args,
-        int retryCount,
-        string errorMessage)
-    {
-        var headers = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        catch (ScanLeaseLostException)
         {
-            [RetryCountHeader] = retryCount,
-            ["x-error"] = errorMessage
-        };
-
-        return new BasicProperties
-        {
-            ContentType = args.BasicProperties.ContentType ?? "application/json",
-            MessageId = args.BasicProperties.MessageId,
-            Persistent = true,
-            Type = args.BasicProperties.Type,
-            Headers = headers
-        };
-    }
-
-    private static int GetRetryCount(IDictionary<string, object?>? headers)
-    {
-        if (headers is null || !headers.TryGetValue(RetryCountHeader, out var value) || value is null)
-        {
-            return 0;
+            logger.LogInformation("Scan {ScanId} no longer owns its lease; stale completion rejected.", lease?.ScanId);
         }
-
-        return value switch
+        catch (Exception exception)
         {
-            int intValue => intValue,
-            long longValue => checked((int)longValue),
-            byte[] bytes when int.TryParse(Encoding.UTF8.GetString(bytes), out var parsed) => parsed,
-            _ => 0
-        };
+            logger.LogWarning("Scan {ScanId} interrupted ({ErrorType}); using durable recovery.",
+                lease?.ScanId, exception.GetType().Name);
+            if (lease is null)
+            {
+                // Acquisition could not commit. Do not acknowledge a request we did not own.
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                await channel.BasicNackAsync(args.DeliveryTag, false, requeue: true, cancellationToken);
+                return;
+            }
+            using var retryScope = serviceScopeFactory.CreateScope();
+            await retryScope.ServiceProvider.GetRequiredService<IScanJobLeaseStore>()
+                .RetryAsync(lease, cancellationToken);
+        }
+        // Processing is committed, requeued durably, or ownership has moved to recovery.
+        await channel.BasicAckAsync(args.DeliveryTag, false, cancellationToken);
     }
 }

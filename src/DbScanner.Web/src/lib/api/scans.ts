@@ -4,7 +4,7 @@ import type { ScanDto, ScanListItemDto } from "@/schemas/scan.schema";
 
 export type CreateScanRequest = {
   targetId: string;
-  selectedNseScriptIds?: string[];
+  selectedCheckIds?: string[];
 };
 
 export function createScan(request: CreateScanRequest): Promise<ScanDto> {
@@ -13,6 +13,10 @@ export function createScan(request: CreateScanRequest): Promise<ScanDto> {
 
 export function getScan(scanId: string): Promise<ScanDto> {
   return apiGet<ScanDto>(`${endpoints.scans}/${scanId}`);
+}
+
+export function getScanForExport(scanId: string): Promise<ScanDto> {
+  return apiGet<ScanDto>(`${endpoints.scans}/${scanId}/export`);
 }
 
 export function getScans(): Promise<ScanListItemDto[]> {

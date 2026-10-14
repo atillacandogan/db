@@ -50,6 +50,11 @@ $existingNames = @($existingSecrets.PSObject.Properties.Name)
 
 $secrets = [ordered]@{
     "Parameters:keycloak-admin-password"          = New-DemoPassword
+    "Parameters:dbscanner-initial-admin-password" = New-DemoPassword
+    "Parameters:keycloak-admin-service-client-secret" = New-ProtectionKey
+    "Parameters:demo-postgres-password"           = New-DemoPassword
+    "Parameters:demo-mysql-password"              = New-DemoPassword
+    "Parameters:demo-mysql-secure-password"       = New-DemoPassword
     "Parameters:demo-mssql-password"              = New-DemoPassword
     "Parameters:demo-mssql-app-password"          = New-DemoPassword
     "Parameters:demo-mssql-scanner-password"      = New-DemoPassword

@@ -173,7 +173,7 @@ public sealed class NmapScannerRuntimeTests
                     0)
             ]);
 
-        var normalized = MsSqlScannerRuntime.NormalizeMsSqlInfoResult(result, [script]);
+        var normalized = MsSqlNmapResultNormalizer.NormalizeMsSqlInfoResult(result, [script]);
 
         var scriptResult = Assert.Single(normalized.ScriptResults);
         Assert.Contains("product=Microsoft SQL Server 2022", scriptResult.NormalizedOutput);

@@ -16,13 +16,45 @@ public sealed class DbScannerDbContextTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
-        await using var dbContext = new DbScannerDbContext(options);
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
         await dbContext.Database.EnsureCreatedAsync();
 
         Assert.True(await dbContext.Targets.AnyAsync());
         Assert.True(await dbContext.Rules.AnyAsync());
         Assert.True(await dbContext.NseScripts.AnyAsync());
         Assert.True(await dbContext.ScanScopeAllowlist.AnyAsync());
+    }
+
+    [Fact]
+    public async Task UserManagementAuditRepository_PersistsSanitizedAuditFields()
+    {
+        var options = new DbContextOptionsBuilder<DbScannerDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
+        var repository = new UserManagementAuditRepository(dbContext);
+        var audit = new UserManagementAudit
+        {
+            ActorSubject = "actor-id",
+            ActorUsername = "admin",
+            ActorEmail = "admin@example.com",
+            Action = "USER_ROLE_CHANGED",
+            TargetUserId = "target-id",
+            PreviousRole = "dbscanner-viewer",
+            NewRole = "dbscanner-operator",
+            PreviousEnabled = true,
+            NewEnabled = true,
+            Succeeded = true
+        };
+
+        await repository.AddAsync(audit);
+        await repository.SaveChangesAsync();
+
+        var persisted = await dbContext.UserManagementAudits.SingleAsync();
+        Assert.Equal("actor-id", persisted.ActorSubject);
+        Assert.Equal("target-id", persisted.TargetUserId);
+        Assert.Equal("dbscanner-operator", persisted.NewRole);
+        Assert.Null(persisted.FailureCode);
     }
 
     [Fact]
@@ -41,7 +73,7 @@ public sealed class DbScannerDbContextTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
-        await using var dbContext = new DbScannerDbContext(options);
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
         dbContext.NseScripts.Add(new NseScript
         {
             Id = "mysql-info-explicit",
@@ -69,7 +101,7 @@ public sealed class DbScannerDbContextTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
-        await using var dbContext = new DbScannerDbContext(options);
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
         dbContext.NseScripts.Add(new NseScript
         {
             Id = "disabled-explicit",
@@ -96,7 +128,7 @@ public sealed class DbScannerDbContextTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
-        await using var dbContext = new DbScannerDbContext(options);
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
         var target = new Target
         {
             Name = "Export Target",
@@ -148,7 +180,7 @@ public sealed class DbScannerDbContextTests
         var options = new DbContextOptionsBuilder<DbScannerDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
-        await using var dbContext = new DbScannerDbContext(options);
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
         var firstJob = DiscoveryJob("first");
         var secondJob = DiscoveryJob("second");
         dbContext.DiscoveryJobs.AddRange(firstJob, secondJob);
@@ -196,7 +228,7 @@ public sealed class DbScannerDbContextTests
         var options = new DbContextOptionsBuilder<DbScannerDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
-        await using var dbContext = new DbScannerDbContext(options);
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
         var firstJob = DiscoveryJob("first-unsupported");
         var secondJob = DiscoveryJob("second-unsupported");
         dbContext.DiscoveryJobs.AddRange(firstJob, secondJob);
@@ -244,7 +276,7 @@ public sealed class DbScannerDbContextTests
         var options = new DbContextOptionsBuilder<DbScannerDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
-        await using var dbContext = new DbScannerDbContext(options);
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
         var job = DiscoveryJob("delete-me");
         job.Status = DiscoveryStatus.Completed;
         var target = new Target

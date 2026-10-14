@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { ScanStatusBadge } from "@/components/feedback/scan-status-badge";
-import { getNseScripts } from "@/lib/api/nse-scripts";
+import { getScanChecks } from "@/lib/api/scan-checks";
 import { getRules } from "@/lib/api/rules";
 import { getTargets } from "@/lib/api/targets";
 import { resolveRiskLevel, type RiskLevel } from "@/lib/utils/risk";
@@ -17,18 +17,18 @@ export default function DashboardPage() {
     queryKey: ["dashboard"],
     retry: 1,
     queryFn: async () => {
-      const [targets, rules, scripts] = await Promise.all([getTargets(), getRules(), getNseScripts()]);
+      const [targets, rules, scripts] = await Promise.all([getTargets(), getRules(), getScanChecks()]);
       return { targets, rules, scripts };
     },
   });
 
   if (dashboardQuery.isPending) {
-    return <section className="placeholder">Dashboard yükleniyor...</section>;
+    return <section className="placeholder" lang="tr">Dashboard yükleniyor...</section>;
   }
 
   if (dashboardQuery.isError) {
     return (
-      <section className="placeholder dashboard-error-state" role="alert">
+      <section className="placeholder dashboard-error-state" role="alert" lang="tr">
         <strong>Dashboard yüklenemedi.</strong>
         <p>{dashboardQuery.error.message}</p>
         <button className="button" type="button" onClick={() => dashboardQuery.refetch()}>
@@ -48,38 +48,38 @@ export default function DashboardPage() {
   const latestScanTarget = latestScans[0];
 
   return (
-    <section className="page-stack page-stack--wide dashboard-page">
+    <section className="page-stack page-stack--wide dashboard-page" lang="tr">
       <header className="rules-hero dashboard-hero">
         <div>
-          <p className="eyebrow">Overview</p>
+          <p className="eyebrow">Genel bakış</p>
           <h1>Db Scanner</h1>
         </div>
         <p className="muted rules-hero__summary">
-          Demo akisinin durumu, son taramalar ve katalog kapsami tek ekranda ozetlenir.
+          Tarama etkinliğini, son sonuçları ve katalog kapsamını tek ekranda takip edin.
         </p>
       </header>
 
-      <section className="dashboard-stats-grid" aria-label="Dashboard metrics">
-        <StatsCard title="Targets" value={targets.length} description={`${activeTargets.length} aktif hedef`} />
+      <section className="dashboard-stats-grid" aria-label="Dashboard ölçümleri">
+        <StatsCard title="Hedefler" value={targets.length} description={`${activeTargets.length} aktif hedef`} />
         <StatsCard
-          title="Completed Scans"
+          title="Tamamlanan Taramalar"
           value={scannedTargets.length}
-          description="Son scan'i tamamlanan hedefler"
+          description="Son taraması tamamlanan hedefler"
         />
-        <StatsCard title="Rules" value={rules.length} description="Rule catalog kaydi" />
-        <StatsCard title="NSE Scripts" value={scripts.length} description="Yonetilen script tanimi" />
+        <StatsCard title="Kurallar" value={rules.length} description="Kural kataloğu kayıtları" />
+        <StatsCard title="Tarama Kontrolleri" value={scripts.length} description="Yönetilen kontrol tanımları" />
       </section>
 
       <section className="dashboard-main-grid">
         <article className="dashboard-panel dashboard-recent-panel">
           <div className="dashboard-panel__heading">
             <div>
-              <p className="detail-label">Recent Activity</p>
-              <h2>Recent scans</h2>
-              <p className="muted">Hedeflerdeki son scan durumlari ve risk sonuclari.</p>
+              <p className="detail-label">Son etkinlik</p>
+              <h2>Son taramalar</h2>
+              <p className="muted">Hedeflerinizin son tarama durumları ve risk sonuçları.</p>
             </div>
             <Link className="link-inline dashboard-panel__heading-link" href="/scans">
-              Tum scan&apos;leri gor
+              Tüm Taramaları Gör
             </Link>
           </div>
 
@@ -92,45 +92,45 @@ export default function DashboardPage() {
           ) : (
             <div className="dashboard-empty-state">
               <EmptyState
-                title="Henuz scan yok."
-                description="Targets ekranindan bir hedef secip tarama baslatin."
+                title="Henüz tarama yok."
+                description="Targets ekranından bir hedef seçip tarama başlatın."
               />
             </div>
           )}
         </article>
 
-        <aside className="dashboard-sidebar" aria-label="Dashboard summaries">
+        <aside className="dashboard-sidebar" aria-label="Dashboard özetleri">
           <LatestRiskCard target={latestScanTarget} />
 
           <article className="dashboard-panel dashboard-sidebar-card">
             <div>
-              <p className="detail-label">Quick Summary</p>
-              <h2>Operational overview</h2>
+              <p className="detail-label">Hızlı özet</p>
+              <h2>Operasyon özeti</h2>
             </div>
             <dl className="dashboard-summary-list">
-              <SummaryRow label="Aktif target" value={activeTargets.length} />
-              <SummaryRow label="Tamamlanan son scan" value={scannedTargets.length} />
-              <SummaryRow label="Toplam rule" value={rules.length} />
-              <SummaryRow label="Toplam NSE script" value={scripts.length} />
+              <SummaryRow label="Aktif hedefler" value={activeTargets.length} />
+              <SummaryRow label="Tamamlanan son taramalar" value={scannedTargets.length} />
+              <SummaryRow label="Toplam kural" value={rules.length} />
+              <SummaryRow label="Toplam tarama kontrolü" value={scripts.length} />
             </dl>
           </article>
 
           <article className="dashboard-panel dashboard-sidebar-card">
             <div>
-              <p className="detail-label">Quick Actions</p>
-              <h2>Workspace shortcuts</h2>
+              <p className="detail-label">Hızlı işlemler</p>
+              <h2>Çalışma alanı kısayolları</h2>
             </div>
-            <nav className="dashboard-quick-actions" aria-label="Dashboard quick actions">
+            <nav className="dashboard-quick-actions" aria-label="Dashboard hızlı işlemleri">
               <Link href="/targets">
-                <span>Targets</span>
+                <span>Hedefler</span>
                 <span aria-hidden="true">→</span>
               </Link>
               <Link href="/scans">
-                <span>Scans</span>
+                <span>Taramalar</span>
                 <span aria-hidden="true">→</span>
               </Link>
               <Link href="/rules">
-                <span>Rule Catalog</span>
+                <span>Kural Kataloğu</span>
                 <span aria-hidden="true">→</span>
               </Link>
             </nav>
@@ -141,38 +141,38 @@ export default function DashboardPage() {
       <section className="dashboard-coverage-section" aria-labelledby="coverage-heading">
         <div className="dashboard-section-heading">
           <div>
-            <p className="eyebrow">Overview</p>
-            <h2 id="coverage-heading">Coverage</h2>
+            <p className="eyebrow">Genel bakış</p>
+            <h2 id="coverage-heading">Kapsam</h2>
           </div>
-          <p className="muted">Rule ve NSE script kataloglarinin guncel kapsami.</p>
+          <p className="muted">Kural ve tarama kontrolü kataloglarının güncel kapsamı.</p>
         </div>
 
         <div className="dashboard-coverage-grid">
           <CoverageCard
-            title="Rule Coverage"
-            description="Katalogdaki ilk rule eslesmeleri."
+            title="Kural Kapsamı"
+            description="Kataloğunuzdaki kurallardan bir seçki."
             href="/rules"
-            linkLabel="Rule Catalog'a git"
+            linkLabel="Kural Kataloğunu Gör"
             items={rules.slice(0, 4).map((rule) => ({
               id: rule.id,
               title: rule.title,
               badge: formatEngine(rule.engine),
               description: formatRuleScripts(rule),
             }))}
-            emptyTitle="Rule kaydi yok."
+            emptyTitle="Katalogda kural kaydı yok."
           />
           <CoverageCard
-            title="Script Readiness"
-            description="Katalogdaki ilk NSE script tanimlari."
+            title="Kontrol Hazırlığı"
+            description="Kataloğunuzdaki tarama kontrollerinden bir seçki."
             href="/rules"
-            linkLabel="NSE Scripts'e git"
+            linkLabel="Tarama Kontrollerini Gör"
             items={scripts.slice(0, 4).map((script) => ({
               id: script.id,
               title: script.displayName,
               badge: formatApprovalStatus(script),
-              description: script.supportedEngines.map(formatEngine).join(", ") || "Engine tanimi yok",
+              description: script.supportedEngines.map(formatEngine).join(", ") || "Veritabanı motoru tanımlanmamış",
             }))}
-            emptyTitle="NSE script kaydi yok."
+            emptyTitle="Katalogda tarama kontrolü yok."
           />
         </div>
       </section>
@@ -215,27 +215,27 @@ function RecentScanCard({ target }: { target: TargetDto }) {
 
       <div className="dashboard-scan-card__meta">
         <div>
-          <span>Started</span>
+          <span>Başlangıç</span>
           <time dateTime={scan.createdAt}>{formatDate(scan.createdAt)}</time>
         </div>
         <div>
-          <span>Risk summary</span>
+          <span>Risk özeti</span>
           {riskLevel && typeof scan.riskScore === "number" ? (
             <span className={`risk-badge risk-badge--${riskLevel}`}>
               {scan.riskScore} / {formatRiskLevel(riskLevel)}
             </span>
           ) : (
-            <span className="muted">N/A</span>
+            <span className="muted">—</span>
           )}
         </div>
       </div>
 
       <div className="dashboard-scan-card__footer">
         <span className="muted dashboard-scan-card__id" title={scan.scanId}>
-          Scan {scan.scanId}
+          Tarama {scan.scanId}
         </span>
         <Link className="link-inline" href={`/scans/${scan.scanId}`}>
-          Scan detayina git
+          Tarama Detayını Gör
         </Link>
       </div>
     </article>
@@ -249,8 +249,8 @@ function LatestRiskCard({ target }: { target?: TargetDto }) {
   return (
     <article className="dashboard-panel dashboard-sidebar-card dashboard-risk-card">
       <div>
-        <p className="detail-label">Latest Risk</p>
-        <h2>Last scan summary</h2>
+        <p className="detail-label">Son risk</p>
+        <h2>Son tarama özeti</h2>
       </div>
       {target && scan ? (
         <>
@@ -261,7 +261,7 @@ function LatestRiskCard({ target }: { target?: TargetDto }) {
                 <span className={`risk-badge risk-badge--${riskLevel}`}>{formatRiskLevel(riskLevel)}</span>
               </>
             ) : (
-              <strong className="muted">N/A</strong>
+              <strong className="muted">—</strong>
             )}
           </div>
           <div className="dashboard-risk-card__target">
@@ -270,7 +270,7 @@ function LatestRiskCard({ target }: { target?: TargetDto }) {
           </div>
         </>
       ) : (
-        <p className="muted dashboard-sidebar-card__empty">Risk ozeti icin tamamlanmis bir scan bekleniyor.</p>
+        <p className="muted dashboard-sidebar-card__empty">Risk özeti için tamamlanmış bir tarama bekleniyor.</p>
       )}
     </article>
   );
@@ -366,13 +366,26 @@ function formatEngine(engine: string): string {
 }
 
 function formatRiskLevel(level: RiskLevel): string {
-  return level.charAt(0).toUpperCase() + level.slice(1);
+  const labels: Record<RiskLevel, string> = {
+    info: "Bilgi",
+    low: "Düşük",
+    medium: "Orta",
+    high: "Yüksek",
+    critical: "Kritik",
+  };
+  return labels[level];
 }
 
 function formatRuleScripts(rule: RuleDto): string {
-  return rule.nseScripts.length > 0 ? rule.nseScripts.join(", ") : "Script eslemesi yok";
+  const scanChecks = rule.scanChecks;
+  return scanChecks.length > 0 ? scanChecks.join(", ") : "Tarama kontrolü atanmamış";
 }
 
 function formatApprovalStatus(script: NseScriptDto): string {
-  return script.approvalStatus.charAt(0).toUpperCase() + script.approvalStatus.slice(1);
+  const labels: Record<NseScriptDto["approvalStatus"], string> = {
+    draft: "Taslak",
+    approved: "Onaylı",
+    disabled: "Devre dışı",
+  };
+  return labels[script.approvalStatus];
 }

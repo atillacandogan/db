@@ -2,6 +2,7 @@ import Keycloak, { type KeycloakTokenParsed } from "keycloak-js";
 
 type DbScannerToken = KeycloakTokenParsed & {
   preferred_username?: string;
+  email?: string;
   roles?: string[];
 };
 
@@ -29,12 +30,12 @@ export async function getAccessToken(): Promise<string> {
   const authenticated = await initializeKeycloak();
   if (!authenticated) {
     await keycloak.login();
-    throw new Error("Keycloak authentication is required.");
+    throw new Error("Keycloak kimlik doğrulaması gerekiyor.");
   }
 
   await keycloak.updateToken(30);
   if (!keycloak.token) {
-    throw new Error("Keycloak access token is unavailable.");
+    throw new Error("Keycloak erişim belirteci alınamadı.");
   }
 
   return keycloak.token;
@@ -43,7 +44,9 @@ export async function getAccessToken(): Promise<string> {
 export function getCurrentIdentity() {
   const token = keycloak.tokenParsed as DbScannerToken | undefined;
   return {
+    userId: token?.sub ?? "",
     username: token?.preferred_username ?? "Kullanıcı",
+    email: token?.email,
     roles: token?.roles ?? [],
   };
 }

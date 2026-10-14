@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace DbScanner.Contracts.Scans;
 
 public sealed record ScanRequestedMessage(
@@ -7,5 +9,8 @@ public sealed record ScanRequestedMessage(
     string Host,
     int Port,
     DateTimeOffset RequestedAt,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<string>? SelectedNseScriptIds = null,
-    string? ProtectedCredentials = null);
+    string? ProtectedCredentials = null,
+    IReadOnlyList<string>? SelectedCheckIds = null,
+    string? TenantId = null);

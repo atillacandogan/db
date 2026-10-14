@@ -1,5 +1,6 @@
 using DbScanner.Application.Ports;
 using DbScanner.Application.Models;
+using DbScanner.Application.Observability;
 using DbScanner.Contracts.Rules;
 using DbScanner.Domain.Entities;
 using DbScanner.Domain.Enums;
@@ -33,7 +34,8 @@ public sealed class RuleCatalogService(IRuleRepository ruleRepository) : IRuleCa
 
     public async Task<RuleDto> CreateRuleAsync(CreateRuleCommand command, CancellationToken cancellationToken = default)
     {
-        Validate(command.Id, command.Title, command.Description, command.MatcherExpression, command.Remediation, command.SupportedEngines, command.NseScripts, command.Weight);
+        var scanChecks = ScanCheckSelectionCompatibility.Resolve(command.ScanChecks, command.NseScripts);
+        Validate(command.Id, command.Title, command.Description, command.MatcherExpression, command.Remediation, command.SupportedEngines, scanChecks, command.Weight);
 
         var existingRule = await ruleRepository.GetByIdAsync(command.Id, cancellationToken);
         if (existingRule is not null)
@@ -56,7 +58,7 @@ public sealed class RuleCatalogService(IRuleRepository ruleRepository) : IRuleCa
             Remediation = command.Remediation.Trim()
         };
 
-        ApplyRelationships(rule, command.SupportedEngines, command.NseScripts);
+        ApplyRelationships(rule, command.SupportedEngines, scanChecks!);
 
         await ruleRepository.AddAsync(rule, cancellationToken);
         await ruleRepository.SaveChangesAsync(cancellationToken);
@@ -66,7 +68,8 @@ public sealed class RuleCatalogService(IRuleRepository ruleRepository) : IRuleCa
 
     public async Task<RuleDto> UpdateRuleAsync(string id, UpdateRuleCommand command, CancellationToken cancellationToken = default)
     {
-        Validate(id, command.Title, command.Description, command.MatcherExpression, command.Remediation, command.SupportedEngines, command.NseScripts, command.Weight);
+        var scanChecks = ScanCheckSelectionCompatibility.Resolve(command.ScanChecks, command.NseScripts);
+        Validate(id, command.Title, command.Description, command.MatcherExpression, command.Remediation, command.SupportedEngines, scanChecks, command.Weight);
 
         var rule = await ruleRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new InvalidOperationException("Rule was not found.");
@@ -82,13 +85,16 @@ public sealed class RuleCatalogService(IRuleRepository ruleRepository) : IRuleCa
         rule.MatcherExpression = command.MatcherExpression.Trim();
         rule.Remediation = command.Remediation.Trim();
 
-        ApplyRelationships(rule, command.SupportedEngines, command.NseScripts);
+        ApplyRelationships(rule, command.SupportedEngines, scanChecks!);
 
         await ruleRepository.SaveChangesAsync(cancellationToken);
         return MapRule(rule);
     }
 
-    private static void ApplyRelationships(Rule rule, IReadOnlyList<string> supportedEngines, IReadOnlyList<string> nseScripts)
+    private static void ApplyRelationships(
+        Rule rule,
+        IReadOnlyList<string> supportedEngines,
+        IReadOnlyCollection<string> scanChecks)
     {
         var requestedEngines = supportedEngines
             .Select(ParseEngine)
@@ -117,29 +123,47 @@ public sealed class RuleCatalogService(IRuleRepository ruleRepository) : IRuleCa
             });
         }
 
-        var requestedScriptIds = nseScripts
-            .Select(script => script.Trim())
-            .Where(script => !string.IsNullOrWhiteSpace(script))
+        var requestedCheckIds = scanChecks
+            .Select(check => check.Trim())
+            .Where(check => !string.IsNullOrWhiteSpace(check))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         foreach (var mapping in rule.RuleScripts
-                     .Where(mapping => !requestedScriptIds.Contains(mapping.NseScriptId))
+                     .Where(mapping => !requestedCheckIds.Contains(
+                         ScanCheckIdCompatibility.Resolve(
+                             mapping.ScanCheckId,
+                             mapping.NseScriptId,
+                             "rule-mapping")!))
                      .ToArray())
         {
             rule.RuleScripts.Remove(mapping);
         }
 
-        var existingScriptIds = rule.RuleScripts
-            .Select(mapping => mapping.NseScriptId)
+        foreach (var mapping in rule.RuleScripts)
+        {
+            if (mapping.ScanCheckId is null)
+            {
+                mapping.ScanCheckId = mapping.NseScriptId;
+                ScanCompatibilityTelemetry.RecordDualWrite("rule-mapping-repair");
+            }
+        }
+
+        var existingCheckIds = rule.RuleScripts
+            .Select(mapping => ScanCheckIdCompatibility.Resolve(
+                mapping.ScanCheckId,
+                mapping.NseScriptId,
+                "rule-mapping")!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var scriptId in requestedScriptIds.Where(scriptId => !existingScriptIds.Contains(scriptId)))
+        foreach (var checkId in requestedCheckIds.Where(checkId => !existingCheckIds.Contains(checkId)))
         {
             rule.RuleScripts.Add(new RuleNseScript
             {
                 RuleId = rule.Id,
-                NseScriptId = scriptId
+                NseScriptId = checkId,
+                ScanCheckId = checkId
             });
+            ScanCompatibilityTelemetry.RecordDualWrite("rule-mapping");
         }
     }
 
@@ -157,7 +181,13 @@ public sealed class RuleCatalogService(IRuleRepository ruleRepository) : IRuleCa
             rule.MatcherExpression,
             rule.Remediation,
             rule.EngineSupport.Select(support => ToEngine(support.Engine)).OrderBy(engine => engine).ToArray(),
-            rule.RuleScripts.Select(mapping => mapping.NseScriptId).OrderBy(id => id).ToArray());
+            rule.RuleScripts
+                .Select(mapping => ScanCheckIdCompatibility.Resolve(
+                    mapping.ScanCheckId,
+                    mapping.NseScriptId,
+                    "rule-response")!)
+                .OrderBy(id => id)
+                .ToArray());
 
     private static void Validate(
         string id,
@@ -166,7 +196,7 @@ public sealed class RuleCatalogService(IRuleRepository ruleRepository) : IRuleCa
         string matcherExpression,
         string remediation,
         IReadOnlyList<string> supportedEngines,
-        IReadOnlyList<string> nseScripts,
+        IReadOnlyCollection<string>? scanChecks,
         int weight)
     {
         if (string.IsNullOrWhiteSpace(id))
@@ -199,9 +229,9 @@ public sealed class RuleCatalogService(IRuleRepository ruleRepository) : IRuleCa
             throw new InvalidOperationException("At least one supported engine is required.");
         }
 
-        if (nseScripts.Count == 0)
+        if (scanChecks is null || scanChecks.Count == 0)
         {
-            throw new InvalidOperationException("At least one script mapping is required.");
+            throw new InvalidOperationException("At least one scan check mapping is required.");
         }
 
         if (weight < 0)

@@ -4,12 +4,22 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { Button } from "@/components/ui/button";
-import { createNseScript, deleteNseScript, getNseScripts, syncNseScripts, updateNseScript, type UpsertNseScriptRequest } from "@/lib/api/nse-scripts";
+import { syncNseScripts } from "@/lib/api/nse-scripts";
+import {
+  createScanCheck,
+  deleteScanCheck,
+  getScanChecks,
+  getScanExecutorCapabilities,
+  updateScanCheck,
+  type UpsertScanCheckRequest,
+} from "@/lib/api/scan-checks";
 import { createRule, getRules, getRuleSupportMatrix, updateRule, type UpsertRuleRequest } from "@/lib/api/rules";
 import { getSeverityLabel } from "@/lib/utils/severity";
 import type { MatcherType, NseScriptDto, NseScriptEngine, NseScriptStatus, ParserType, ScriptSeverity } from "@/schemas/nse-script.schema";
 import type { RuleDto, RuleSupportMatrixDto, RuleSeverity } from "@/schemas/rule.schema";
+import type { ScanExecutorCapabilityDto } from "@/schemas/scan-check.schema";
 import type { DatabaseEngine } from "@/schemas/target.schema";
+import { useAuth } from "@/components/providers/auth-provider";
 
 type RulesTab = "rules" | "scripts";
 type RuleEngineOption = "generic" | DatabaseEngine;
@@ -28,12 +38,13 @@ type RuleFormState = {
   matcherExpression: string;
   remediation: string;
   supportedEngines: DatabaseEngine[];
-  nseScripts: string[];
+  scanChecks: string[];
 };
 
 type ScriptFormState = {
   id: string;
   nseScriptName: string;
+  executorType: string;
   displayName: string;
   description: string;
   supportedEngines: NseScriptEngine[];
@@ -47,6 +58,9 @@ type ScriptFormState = {
   categories: string;
   remediationTemplate: string;
   docUrl: string;
+  configurationSchema: string;
+  requiresCredentials: boolean;
+  isIntrusive: boolean;
 };
 
 const initialRuleFormState: RuleFormState = {
@@ -62,12 +76,13 @@ const initialRuleFormState: RuleFormState = {
   matcherExpression: "",
   remediation: "",
   supportedEngines: ["postgresql"],
-  nseScripts: [],
+  scanChecks: [],
 };
 
 const initialScriptFormState: ScriptFormState = {
   id: "",
   nseScriptName: "",
+  executorType: "nmap-nse",
   displayName: "",
   description: "",
   supportedEngines: ["postgresql"],
@@ -81,6 +96,9 @@ const initialScriptFormState: ScriptFormState = {
   categories: "",
   remediationTemplate: "",
   docUrl: "",
+  configurationSchema: "",
+  requiresCredentials: false,
+  isIntrusive: false,
 };
 
 function splitCategories(categories?: string) {
@@ -88,6 +106,16 @@ function splitCategories(categories?: string) {
     .split(",")
     .map((category) => category.trim().toLowerCase())
     .filter(Boolean);
+}
+
+function getRuleScanChecks(rule: RuleDto) {
+  return rule.scanChecks;
+}
+
+function formatScanCheckImplementation(script: NseScriptDto) {
+  return script.executorType === "nmap-nse" || !script.executorType
+    ? `${script.nseScriptName}.nse`
+    : script.executorType;
 }
 
 function formatEngine(engine: NseScriptEngine | RuleEngineOption) {
@@ -124,12 +152,14 @@ function normalizeMatcherType(value: string): MatcherType {
     : value.trim().toLowerCase() as MatcherType;
 }
 
-function createScriptUpdateRequest(
+function createScanCheckUpdateRequest(
   script: NseScriptDto,
   approvalStatus: NseScriptStatus = script.approvalStatus,
   defaultEnabled: boolean = script.defaultEnabled,
-): UpsertNseScriptRequest {
+): UpsertScanCheckRequest {
   return {
+    name: script.nseScriptName,
+    executorType: script.executorType ?? "nmap-nse",
     displayName: script.displayName,
     description: script.description,
     supportedEngines: script.supportedEngines,
@@ -141,8 +171,11 @@ function createScriptUpdateRequest(
     severity: script.severity,
     weight: script.weight,
     categories: script.categories,
+    configurationSchema: script.configurationSchema,
+    requiresCredentials: script.requiresCredentials,
+    isIntrusive: script.isIntrusive,
     remediationTemplate: script.remediationTemplate,
-    docUrl: script.docUrl,
+    documentationUrl: script.docUrl,
   };
 }
 
@@ -174,6 +207,8 @@ function InlineSwitch({ checked, disabled = false, label, onChange }: InlineSwit
 
 export function RulesClient() {
   const queryClient = useQueryClient();
+  const { can } = useAuth();
+  const canManageCatalog = can("manageCatalog");
   const [activeTab, setActiveTab] = useState<RulesTab>("rules");
   const [ruleFormState, setRuleFormState] = useState<RuleFormState>(initialRuleFormState);
   const [scriptFormState, setScriptFormState] = useState<ScriptFormState>(initialScriptFormState);
@@ -191,7 +226,17 @@ export function RulesClient() {
 
   const rulesQuery = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const matrixQuery = useQuery({ queryKey: ["rules", "support-matrix"], queryFn: getRuleSupportMatrix });
-  const scriptsQuery = useQuery({ queryKey: ["nse-scripts"], queryFn: getNseScripts });
+  const scriptsQuery = useQuery({ queryKey: ["scan-checks"], queryFn: getScanChecks });
+  const executorCapabilitiesQuery = useQuery({
+    queryKey: ["scan-checks", "executors"],
+    queryFn: getScanExecutorCapabilities,
+    enabled: canManageCatalog,
+  });
+
+  const executorCapabilities: ScanExecutorCapabilityDto[] = executorCapabilitiesQuery.data ?? [];
+  const selectedExecutorCapability = executorCapabilities.find(
+    (capability) => capability.executorType === scriptFormState.executorType,
+  );
 
   useEffect(() => {
     if (!feedback && !error) {
@@ -246,6 +291,7 @@ export function RulesClient() {
       const matchesCategory = scriptCategory === "all" || categories.includes(scriptCategory);
       const haystack = [
         script.id,
+        script.executorType ?? "nmap-nse",
         script.nseScriptName,
         script.displayName,
         script.description,
@@ -294,23 +340,22 @@ export function RulesClient() {
   });
 
   const scriptMutation = useMutation({
-    mutationFn: async (request: UpsertNseScriptRequest) => {
+    mutationFn: async (request: UpsertScanCheckRequest) => {
       if (selectedScriptId) {
-        return updateNseScript(selectedScriptId, request);
+        return updateScanCheck(selectedScriptId, request);
       }
 
-      return createNseScript({
+      return createScanCheck({
         ...request,
         id: scriptFormState.id.trim(),
-        nseScriptName: scriptFormState.nseScriptName.trim(),
       });
     },
     onSuccess: async (script) => {
       setSelectedScriptId(script.id);
       loadScriptIntoForm(script);
-      setFeedback(`Script kaydedildi: ${script.id}`);
+      setFeedback(`Scan check kaydedildi: ${script.id}`);
       setError(null);
-      await queryClient.invalidateQueries({ queryKey: ["nse-scripts"] });
+      await queryClient.invalidateQueries({ queryKey: ["scan-checks"] });
       setIsScriptModalOpen(false);
     },
     onError: (mutationError: Error) => {
@@ -324,7 +369,7 @@ export function RulesClient() {
     onSuccess: async (result) => {
       setFeedback(`Sync başarılı: ${result.addedCount} eklendi, ${result.updatedCount} güncellendi, ${result.unchangedCount} değişmedi, ${result.skippedCount} atlandı, ${result.failedCount} hata.`);
       setError(null);
-      await queryClient.invalidateQueries({ queryKey: ["nse-scripts"] });
+      await queryClient.invalidateQueries({ queryKey: ["scan-checks"] });
     },
     onError: (mutationError: Error) => {
       setError(mutationError.message);
@@ -334,17 +379,17 @@ export function RulesClient() {
 
   const scriptEnabledMutation = useMutation({
     mutationFn: ({ script, enabled }: { script: NseScriptDto; enabled: boolean }) =>
-      updateNseScript(
+      updateScanCheck(
         script.id,
-        createScriptUpdateRequest(
+        createScanCheckUpdateRequest(
           script,
           enabled && script.approvalStatus === "disabled" ? "draft" : enabled ? script.approvalStatus : "disabled",
           enabled ? script.defaultEnabled : false,
         ),
       ),
     onMutate: async ({ script, enabled }) => {
-      await queryClient.cancelQueries({ queryKey: ["nse-scripts"] });
-      const previousScripts = queryClient.getQueryData<NseScriptDto[]>(["nse-scripts"]);
+      await queryClient.cancelQueries({ queryKey: ["scan-checks"] });
+      const previousScripts = queryClient.getQueryData<NseScriptDto[]>(["scan-checks"]);
       const approvalStatus = enabled
         ? script.approvalStatus === "disabled" ? "draft" : script.approvalStatus
         : "disabled";
@@ -354,7 +399,7 @@ export function RulesClient() {
         defaultEnabled: enabled ? script.defaultEnabled : false,
       } satisfies NseScriptDto;
 
-      queryClient.setQueryData<NseScriptDto[]>(["nse-scripts"], (current = []) =>
+      queryClient.setQueryData<NseScriptDto[]>(["scan-checks"], (current = []) =>
         current.map((item) => item.id === script.id ? updatedScript : item),
       );
 
@@ -364,11 +409,11 @@ export function RulesClient() {
       setFeedback(`Enabled updated: ${script.displayName}`);
       setError(null);
       setScriptPendingDetails((current) => current?.id === script.id ? script : current);
-      await queryClient.invalidateQueries({ queryKey: ["nse-scripts"] });
+      await queryClient.invalidateQueries({ queryKey: ["scan-checks"] });
     },
     onError: (mutationError: Error, _variables, context) => {
       if (context?.previousScripts) {
-        queryClient.setQueryData(["nse-scripts"], context.previousScripts);
+        queryClient.setQueryData(["scan-checks"], context.previousScripts);
       }
 
       setError(mutationError.message);
@@ -378,36 +423,36 @@ export function RulesClient() {
 
   const scriptDefaultMutation = useMutation({
     mutationFn: ({ script, defaultEnabled }: { script: NseScriptDto; defaultEnabled: boolean }) =>
-      updateNseScript(
+      updateScanCheck(
         script.id,
-        createScriptUpdateRequest(script, script.approvalStatus, defaultEnabled),
+        createScanCheckUpdateRequest(script, script.approvalStatus, defaultEnabled),
       ),
     onMutate: async ({ script, defaultEnabled }) => {
-      await queryClient.cancelQueries({ queryKey: ["nse-scripts"] });
-      const previousScripts = queryClient.getQueryData<NseScriptDto[]>(["nse-scripts"]);
+      await queryClient.cancelQueries({ queryKey: ["scan-checks"] });
+      const previousScripts = queryClient.getQueryData<NseScriptDto[]>(["scan-checks"]);
       const updatedScript = {
         ...script,
         defaultEnabled: script.approvalStatus === "disabled" ? false : defaultEnabled,
       } satisfies NseScriptDto;
 
-      queryClient.setQueryData<NseScriptDto[]>(["nse-scripts"], (current = []) =>
+      queryClient.setQueryData<NseScriptDto[]>(["scan-checks"], (current = []) =>
         current.map((item) => item.id === script.id ? updatedScript : item),
       );
 
       return { previousScripts };
     },
     onSuccess: async (script) => {
-      queryClient.setQueryData<NseScriptDto[]>(["nse-scripts"], (current = []) =>
+      queryClient.setQueryData<NseScriptDto[]>(["scan-checks"], (current = []) =>
         current.map((item) => item.id === script.id ? script : item),
       );
       setFeedback(`Default updated: ${script.displayName}`);
       setError(null);
       setScriptPendingDetails((current) => current?.id === script.id ? script : current);
-      await queryClient.invalidateQueries({ queryKey: ["nse-scripts"] });
+      await queryClient.invalidateQueries({ queryKey: ["scan-checks"] });
     },
     onError: (mutationError: Error, _variables, context) => {
       if (context?.previousScripts) {
-        queryClient.setQueryData(["nse-scripts"], context.previousScripts);
+        queryClient.setQueryData(["scan-checks"], context.previousScripts);
       }
 
       setError(mutationError.message);
@@ -416,7 +461,7 @@ export function RulesClient() {
   });
 
   const deleteScriptMutation = useMutation({
-    mutationFn: deleteNseScript,
+    mutationFn: deleteScanCheck,
     onSuccess: async (_result, scriptId) => {
       if (selectedScriptId === scriptId) {
         setSelectedScriptId(null);
@@ -426,7 +471,7 @@ export function RulesClient() {
       setFeedback(`Silme başarılı: ${scriptId}`);
       setError(null);
       setScriptPendingDelete(null);
-      await queryClient.invalidateQueries({ queryKey: ["nse-scripts"] });
+      await queryClient.invalidateQueries({ queryKey: ["scan-checks"] });
     },
     onError: (mutationError: Error) => {
       setError(mutationError.message);
@@ -448,7 +493,7 @@ export function RulesClient() {
       matcherExpression: rule.matcherExpression,
       remediation: rule.remediation,
       supportedEngines: rule.supportedEngines,
-      nseScripts: rule.nseScripts,
+      scanChecks: getRuleScanChecks(rule),
     });
   }
 
@@ -456,6 +501,7 @@ export function RulesClient() {
     setScriptFormState({
       id: script.id,
       nseScriptName: script.nseScriptName,
+      executorType: script.executorType ?? "nmap-nse",
       displayName: script.displayName,
       description: script.description,
       supportedEngines: script.supportedEngines,
@@ -469,6 +515,9 @@ export function RulesClient() {
       categories: script.categories ?? "",
       remediationTemplate: script.remediationTemplate ?? "",
       docUrl: script.docUrl ?? "",
+      configurationSchema: script.configurationSchema ?? "",
+      requiresCredentials: script.requiresCredentials,
+      isIntrusive: script.isIntrusive,
     });
   }
 
@@ -482,9 +531,16 @@ export function RulesClient() {
   }
 
   function resetScriptForm() {
+    const defaultCapability = executorCapabilities.find(
+      (capability) => capability.allowsManualCheckCreation,
+    );
     setActiveTab("scripts");
     setSelectedScriptId(null);
-    setScriptFormState(initialScriptFormState);
+    setScriptFormState({
+      ...initialScriptFormState,
+      executorType: defaultCapability?.executorType ?? initialScriptFormState.executorType,
+      supportedEngines: defaultCapability?.supportedEngines ?? initialScriptFormState.supportedEngines,
+    });
     setFeedback(null);
     setError(null);
     setIsScriptModalOpen(true);
@@ -561,9 +617,9 @@ export function RulesClient() {
   function toggleRuleScript(scriptId: string) {
     setRuleFormState((current) => ({
       ...current,
-      nseScripts: current.nseScripts.includes(scriptId)
-        ? current.nseScripts.filter((item) => item !== scriptId)
-        : [...current.nseScripts, scriptId],
+      scanChecks: current.scanChecks.includes(scriptId)
+        ? current.scanChecks.filter((item) => item !== scriptId)
+        : [...current.scanChecks, scriptId],
     }));
   }
 
@@ -593,7 +649,7 @@ export function RulesClient() {
       matcherExpression: ruleFormState.matcherExpression,
       remediation: ruleFormState.remediation,
       supportedEngines: ruleFormState.supportedEngines,
-      nseScripts: ruleFormState.nseScripts,
+      scanChecks: ruleFormState.scanChecks,
     });
   }
 
@@ -609,6 +665,8 @@ export function RulesClient() {
     }
 
     scriptMutation.mutate({
+      name: scriptFormState.nseScriptName.trim(),
+      executorType: scriptFormState.executorType,
       displayName: scriptFormState.displayName.trim(),
       description: scriptFormState.description.trim(),
       supportedEngines: scriptFormState.supportedEngines,
@@ -620,8 +678,11 @@ export function RulesClient() {
       severity: scriptFormState.severity,
       weight: Number(scriptFormState.weight),
       categories: scriptFormState.categories.trim() || undefined,
+      configurationSchema: scriptFormState.configurationSchema.trim() || undefined,
+      requiresCredentials: scriptFormState.requiresCredentials,
+      isIntrusive: scriptFormState.isIntrusive,
       remediationTemplate: scriptFormState.remediationTemplate.trim() || undefined,
-      docUrl: scriptFormState.docUrl.trim() || undefined,
+      documentationUrl: scriptFormState.docUrl.trim() || undefined,
     });
   }
 
@@ -638,7 +699,7 @@ export function RulesClient() {
     }
 
     if (!nseScriptName) {
-      return "NSE script name bos birakilamaz.";
+      return "Scan check name bos birakilamaz.";
     }
 
     if (!displayName) {
@@ -657,6 +718,25 @@ export function RulesClient() {
       return "En az bir supported engine secilmelidir.";
     }
 
+    if (!selectedExecutorCapability) {
+      return "Kayitli bir executor secilmelidir.";
+    }
+
+    if (!selectedScriptId && !selectedExecutorCapability.allowsManualCheckCreation) {
+      return "Secilen executor manuel scan check olusturmayi desteklemiyor.";
+    }
+
+    if (scriptFormState.supportedEngines.some(
+      (engine) => !selectedExecutorCapability.supportedEngines.includes(engine),
+    )) {
+      return "Secilen executor bu database engine kapsamını desteklemiyor.";
+    }
+
+    if (scriptFormState.configurationSchema.trim()
+      && !selectedExecutorCapability.supportsConfigurationSchema) {
+      return "Secilen executor configuration schema desteklemiyor.";
+    }
+
     if (!Number.isFinite(weight) || weight < 0) {
       return "Weight 0 veya daha buyuk bir sayi olmalidir.";
     }
@@ -671,7 +751,7 @@ export function RulesClient() {
     });
 
     if (duplicateScript) {
-      return "Bu id veya NSE script name ile kayit zaten mevcut.";
+      return "Bu id veya scan check name ile kayit zaten mevcut.";
     }
 
     return null;
@@ -685,8 +765,8 @@ export function RulesClient() {
           <h1>Rules</h1>
         </div>
         <p className="muted rules-hero__summary">
-          Rule catalog tarama sonucunu bulguya cevirir. Script catalog ise hangi NSE script&apos;lerinin calistirilacagini ve nasil parse
-          edilecegini yonetir.
+          Rule catalog tarama sonucunu bulguya cevirir. Scan check catalog ise kontrollerin hangi executor ile calistirilacagini ve nasil
+          parse edilecegini yonetir.
         </p>
       </div>
 
@@ -704,7 +784,7 @@ export function RulesClient() {
             className={`tab-strip__button${activeTab === "scripts" ? " tab-strip__button--active" : ""}`}
             onClick={() => setActiveTab("scripts")}
           >
-            NSE Scripts
+            Scan Checks
           </button>
         </div>
         {activeTab === "rules" ? (
@@ -714,9 +794,9 @@ export function RulesClient() {
                 <p className="detail-label">Rule Catalog</p>
                 <p className="muted">Kural tanimlari, engine kapsami ve script mapping yonetimi.</p>
               </div>
-              <Button type="button" onClick={resetRuleForm}>
+              {canManageCatalog ? <Button type="button" onClick={resetRuleForm}>
                 Yeni Rule
-              </Button>
+              </Button> : null}
             </div>
 
             <div className="rule-catalog-summary">
@@ -788,20 +868,20 @@ export function RulesClient() {
                           <dd>{rule.weight}</dd>
                         </div>
                         <div className="rule-card__scripts">
-                          <dt>Scripts</dt>
+                          <dt>Scan Checks</dt>
                           <dd>
                             <div className="catalog-pill-list">
-                              {rule.nseScripts.length > 0 ? (
-                                rule.nseScripts.slice(0, 3).map((scriptId) => (
+                              {getRuleScanChecks(rule).length > 0 ? (
+                                getRuleScanChecks(rule).slice(0, 3).map((scriptId) => (
                                   <span key={`${rule.id}-${scriptId}`} className="catalog-pill">
                                     {scriptId}
                                   </span>
                                 ))
                               ) : (
-                                <span className="muted">Script mapping yok</span>
+                                <span className="muted">Scan check mapping yok</span>
                               )}
-                              {rule.nseScripts.length > 3 ? (
-                                <span className="catalog-pill catalog-pill--muted">+{rule.nseScripts.length - 3}</span>
+                              {getRuleScanChecks(rule).length > 3 ? (
+                                <span className="catalog-pill catalog-pill--muted">+{getRuleScanChecks(rule).length - 3}</span>
                               ) : null}
                             </div>
                           </dd>
@@ -815,9 +895,9 @@ export function RulesClient() {
                         <span className="rule-card__support muted">
                           {supportEntries.length > 0 ? `${supportEntries.length} engine desteği` : "Engine desteği yok"}
                         </span>
-                        <Button type="button" onClick={() => loadRule(rule.id)}>
+                        {canManageCatalog ? <Button type="button" onClick={() => loadRule(rule.id)}>
                           Düzenle
-                        </Button>
+                        </Button> : null}
                       </div>
                     </article>
                   );
@@ -938,11 +1018,11 @@ export function RulesClient() {
                     </div>
 
                     <div className="field-group rule-scripts-field">
-                      <span>Mapped Scripts</span>
+                      <span>Mapped Scan Checks</span>
                       <div className="checkbox-grid">
                         {sortedScripts.map((script) => (
                           <label key={script.id} className="checkbox-item">
-                            <input type="checkbox" checked={ruleFormState.nseScripts.includes(script.id)} onChange={() => toggleRuleScript(script.id)} />
+                            <input type="checkbox" checked={ruleFormState.scanChecks.includes(script.id)} onChange={() => toggleRuleScript(script.id)} />
                             <span>{script.displayName}</span>
                           </label>
                         ))}
@@ -971,10 +1051,10 @@ export function RulesClient() {
           <section className="rules-section">
             <div className="section-heading">
               <div>
-                <p className="detail-label">NSE Scripts</p>
-                <p className="muted">Script envanteri ve parser tanimlari.</p>
+                <p className="detail-label">Scan Checks</p>
+                <p className="muted">Kontrol envanteri, executor ve parser tanimlari.</p>
               </div>
-              <div className="section-heading-actions">
+              {canManageCatalog ? <div className="section-heading-actions">
                 <Button
                   className="button button--secondary"
                   type="button"
@@ -992,22 +1072,27 @@ export function RulesClient() {
                     </>
                   ) : "Sync"}
                 </Button>
-                <Button type="button" onClick={resetScriptForm}>
-                  Yeni NSE Script
+                <Button
+                  type="button"
+                  onClick={resetScriptForm}
+                  disabled={executorCapabilitiesQuery.isLoading
+                    || !executorCapabilities.some((capability) => capability.allowsManualCheckCreation)}
+                >
+                  Yeni Scan Check
                 </Button>
-              </div>
+              </div> : null}
             </div>
 
-            {scriptsQuery.isLoading ? <p className="muted">Script listesi yukleniyor.</p> : null}
-            {scriptsQuery.isError ? <p className="feedback-error">Script listesi alinamadi.</p> : null}
+            {scriptsQuery.isLoading ? <p className="muted">Scan check listesi yukleniyor.</p> : null}
+            {scriptsQuery.isError ? <p className="feedback-error">Scan check listesi alinamadi.</p> : null}
 
             {scriptsQuery.data ? (
               <div className="nse-script-grid">
                 <div className="script-grid-toolbar">
                   <div>
-                    <p className="detail-label">Script Catalog</p>
+                    <p className="detail-label">Scan Check Catalog</p>
                     <p className="muted">
-                      {sortedScripts.length} scripts toplam, {filteredScripts.length} sonuc gosteriliyor.
+                      {sortedScripts.length} kontrol toplam, {filteredScripts.length} sonuc gosteriliyor.
                     </p>
                   </div>
 
@@ -1041,8 +1126,8 @@ export function RulesClient() {
 
                 <div className="catalog-table nse-script-table">
                   <div className="catalog-table__header">
-                    <span>Script Name</span>
-                    <span>File Name</span>
+                    <span>Scan Check</span>
+                    <span>Executor</span>
                     <span>Categories</span>
                     <span>Enabled</span>
                     <span>Default</span>
@@ -1078,7 +1163,7 @@ export function RulesClient() {
                       </div>
 
                       <div className="catalog-table__cell nse-script-table__filename">
-                        <span>{script.nseScriptName}.nse</span>
+                        <span>{formatScanCheckImplementation(script)}</span>
                       </div>
 
                       <div className="catalog-table__cell nse-script-table__categories">
@@ -1096,7 +1181,7 @@ export function RulesClient() {
                       <div className="catalog-table__cell nse-script-table__status">
                         <InlineSwitch
                           checked={isEnabled}
-                          disabled={!isAvailable || isSwitchSaving}
+                          disabled={!canManageCatalog || !isAvailable || isSwitchSaving}
                           label={`${script.displayName} enabled`}
                           onChange={(enabled) => {
                             setFeedback(null);
@@ -1110,7 +1195,7 @@ export function RulesClient() {
                       <div className="catalog-table__cell nse-script-table__default">
                         <InlineSwitch
                           checked={isEnabled && script.defaultEnabled}
-                          disabled={!isEnabled || isSwitchSaving}
+                          disabled={!canManageCatalog || !isEnabled || isSwitchSaving}
                           label={`${script.displayName} default`}
                           onChange={(defaultEnabled) => {
                             setFeedback(null);
@@ -1129,10 +1214,10 @@ export function RulesClient() {
                         >
                           Detaylar
                         </Button>
-                        <Button type="button" onClick={() => loadScript(script.id)}>
+                        {canManageCatalog ? <Button type="button" onClick={() => loadScript(script.id)}>
                           Duzenle
-                        </Button>
-                        {script.source === "manual" && script.canDelete ? (
+                        </Button> : null}
+                        {canManageCatalog && script.source === "manual" && script.canDelete ? (
                           <Button
                             className="button button--danger"
                             type="button"
@@ -1152,7 +1237,7 @@ export function RulesClient() {
                   })}
                 </div>
 
-                {filteredScripts.length === 0 ? <p className="muted">Filtreye uyan NSE script bulunamadi.</p> : null}
+                {filteredScripts.length === 0 ? <p className="muted">Filtreye uyan scan check bulunamadi.</p> : null}
 
                 <div className="pagination-bar">
                   <span className="muted">
@@ -1170,7 +1255,7 @@ export function RulesClient() {
               </div>
             ) : null}
 
-            {scriptsQuery.data && sortedScripts.length === 0 ? <p className="muted">Kayitli NSE script yok.</p> : null}
+            {scriptsQuery.data && sortedScripts.length === 0 ? <p className="muted">Kayitli scan check yok.</p> : null}
 
             {isScriptModalOpen ? (
               <div
@@ -1186,21 +1271,63 @@ export function RulesClient() {
                   <div className="modal-panel__header">
                     <div>
                       <p className="detail-label" id="nse-script-modal-title">
-                        {selectedScriptId ? "Script Editor" : "Yeni NSE Script"}
+                        {selectedScriptId ? "Scan Check Editor" : "Yeni Scan Check"}
                       </p>
-                      <p className="muted">{selectedScriptId ? "Secili script kaydini guncelle." : "Yeni bir NSE script tanimi olustur."}</p>
+                      <p className="muted">{selectedScriptId ? "Secili scan check kaydini guncelle." : "Kayitli bir executor icin yeni scan check olustur."}</p>
                     </div>
                   </div>
 
                 <form className="form-grid" onSubmit={handleScriptSubmit}>
                   <label className="field-group">
-                    <span>Script Id</span>
+                    <span>Scan Check Id</span>
                     <input className="input" value={scriptFormState.id} disabled={Boolean(selectedScriptId)} onChange={(event) => setScriptFormState((current) => ({ ...current, id: event.target.value }))} required />
                   </label>
 
                   <label className="field-group">
-                    <span>NSE Script Name</span>
-                    <input className="input" value={scriptFormState.nseScriptName} disabled={Boolean(selectedScriptId)} onChange={(event) => setScriptFormState((current) => ({ ...current, nseScriptName: event.target.value }))} required />
+                    <span>Executor</span>
+                    <select
+                      className="input"
+                      value={scriptFormState.executorType}
+                      disabled={Boolean(selectedScriptId)}
+                      onChange={(event) => {
+                        const capability = executorCapabilities.find(
+                          (item) => item.executorType === event.target.value,
+                        );
+                        setScriptFormState((current) => ({
+                          ...current,
+                          executorType: event.target.value,
+                          supportedEngines: capability?.supportedEngines ?? [],
+                          configurationSchema: capability?.supportsConfigurationSchema
+                            ? current.configurationSchema
+                            : "",
+                        }));
+                      }}
+                      required
+                    >
+                      {executorCapabilities.map((capability) => (
+                        <option
+                          key={capability.executorType}
+                          value={capability.executorType}
+                          disabled={!selectedScriptId && !capability.allowsManualCheckCreation}
+                        >
+                          {capability.displayName}
+                        </option>
+                      ))}
+                    </select>
+                    {selectedExecutorCapability ? (
+                      <span className="muted">{selectedExecutorCapability.description}</span>
+                    ) : null}
+                  </label>
+
+                  <label className="field-group">
+                    <span>Check Name</span>
+                    <input
+                      className="input"
+                      value={scriptFormState.nseScriptName}
+                      disabled={Boolean(selectedScriptId) && !selectedExecutorCapability?.allowsCheckNameEditing}
+                      onChange={(event) => setScriptFormState((current) => ({ ...current, nseScriptName: event.target.value }))}
+                      required
+                    />
                   </label>
 
                   <label className="field-group">
@@ -1289,12 +1416,28 @@ export function RulesClient() {
                     <input className="input" value={scriptFormState.docUrl} onChange={(event) => setScriptFormState((current) => ({ ...current, docUrl: event.target.value }))} />
                   </label>
 
+                  {selectedExecutorCapability?.supportsConfigurationSchema ? (
+                    <label className="field-group">
+                      <span>Configuration Schema (JSON)</span>
+                      <textarea
+                        className="input"
+                        value={scriptFormState.configurationSchema}
+                        onChange={(event) => setScriptFormState((current) => ({ ...current, configurationSchema: event.target.value }))}
+                      />
+                    </label>
+                  ) : null}
+
                   <div className="field-group">
                     <span>Supported Engines</span>
                     <div className="checkbox-row">
                       {(["generic", "postgresql", "mysql", "mssql", "oracle"] as NseScriptEngine[]).map((engine) => (
                         <label key={engine} className="checkbox-item">
-                          <input type="checkbox" checked={scriptFormState.supportedEngines.includes(engine)} onChange={() => toggleScriptEngine(engine)} />
+                          <input
+                            type="checkbox"
+                            checked={scriptFormState.supportedEngines.includes(engine)}
+                            disabled={!selectedExecutorCapability?.supportedEngines.includes(engine)}
+                            onChange={() => toggleScriptEngine(engine)}
+                          />
                           <span>{formatEngine(engine)}</span>
                         </label>
                       ))}
@@ -1311,12 +1454,30 @@ export function RulesClient() {
                     <span>Default enabled</span>
                   </label>
 
+                  <label className="checkbox-item checkbox-item--inline">
+                    <input
+                      type="checkbox"
+                      checked={scriptFormState.requiresCredentials}
+                      onChange={(event) => setScriptFormState((current) => ({ ...current, requiresCredentials: event.target.checked }))}
+                    />
+                    <span>Requires credentials</span>
+                  </label>
+
+                  <label className="checkbox-item checkbox-item--inline">
+                    <input
+                      type="checkbox"
+                      checked={scriptFormState.isIntrusive}
+                      onChange={(event) => setScriptFormState((current) => ({ ...current, isIntrusive: event.target.checked }))}
+                    />
+                    <span>Intrusive check</span>
+                  </label>
+
                     <div className="form-actions form-actions--split">
                       <Button type="button" onClick={closeScriptModal} disabled={scriptMutation.isPending}>
                         Iptal
                       </Button>
-                    <Button type="submit" disabled={scriptMutation.isPending}>
-                      {scriptMutation.isPending ? "Kaydediliyor" : selectedScriptId ? "Script Guncelle" : "Script Ekle"}
+                    <Button type="submit" disabled={scriptMutation.isPending || !selectedExecutorCapability}>
+                      {scriptMutation.isPending ? "Kaydediliyor" : selectedScriptId ? "Scan Check Guncelle" : "Scan Check Ekle"}
                     </Button>
                   </div>
                 </form>
@@ -1337,20 +1498,20 @@ export function RulesClient() {
                 <section className="modal-panel modal-panel--details" role="dialog" aria-modal="true" aria-labelledby="nse-script-details-title">
                   <div className="modal-panel__header">
                     <div>
-                      <p className="detail-label" id="nse-script-details-title">NSE Script Details</p>
-                      <p className="muted">Read-only script catalog information.</p>
+                      <p className="detail-label" id="nse-script-details-title">Scan Check Details</p>
+                      <p className="muted">Read-only scan check catalog information.</p>
                     </div>
                   </div>
 
                   <dl className="script-details-grid">
                     <div className="script-details-item">
-                      <dt>Script Name</dt>
+                      <dt>Scan Check</dt>
                       <dd>{scriptPendingDetails.displayName}</dd>
                       <dd className="muted">{scriptPendingDetails.id}</dd>
                     </div>
                     <div className="script-details-item">
-                      <dt>File Name</dt>
-                      <dd>{scriptPendingDetails.nseScriptName}.nse</dd>
+                      <dt>Executor</dt>
+                      <dd>{formatScanCheckImplementation(scriptPendingDetails)}</dd>
                     </div>
                     <div className="script-details-item">
                       <dt>Source</dt>
@@ -1420,6 +1581,12 @@ export function RulesClient() {
                       <dt>Intrusive</dt>
                       <dd>{scriptPendingDetails.isIntrusive ? "Yes" : "No"}</dd>
                     </div>
+                    {scriptPendingDetails.configurationSchema ? (
+                      <div className="script-details-item script-details-item--wide">
+                        <dt>Configuration Schema</dt>
+                        <dd className="script-details-description">{scriptPendingDetails.configurationSchema}</dd>
+                      </div>
+                    ) : null}
                     <div className="script-details-item script-details-item--wide">
                       <dt>Matcher Expression</dt>
                       <dd className="script-details-description">{scriptPendingDetails.matcherExpression || "-"}</dd>
@@ -1459,15 +1626,15 @@ export function RulesClient() {
                   <div className="modal-panel__header">
                     <div>
                       <p className="detail-label" id="delete-nse-script-title">
-                        NSE Script Sil
+                        Scan Check Sil
                       </p>
-                      <p className="muted">Bu NSE scriptini silmek istediğinize emin misiniz?</p>
+                      <p className="muted">Bu scan check kaydini silmek istediğinize emin misiniz?</p>
                     </div>
                   </div>
 
                   <div className="confirm-summary">
                     <strong>{scriptPendingDelete.displayName}</strong>
-                    <span className="muted">{scriptPendingDelete.nseScriptName}.nse</span>
+                    <span className="muted">{formatScanCheckImplementation(scriptPendingDelete)}</span>
                   </div>
 
                   <div className="modal-actions">

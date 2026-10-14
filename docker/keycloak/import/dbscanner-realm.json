@@ -4,6 +4,7 @@
   "enabled": true,
   "registrationAllowed": false,
   "resetPasswordAllowed": false,
+  "verifyEmail": false,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
   "roles": {
@@ -96,6 +97,21 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "dbscanner-admin-service",
+      "name": "DBScanner User Management Service",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${DBSCANNER_ADMIN_SERVICE_CLIENT_SECRET}",
+      "bearerOnly": false,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "fullScopeAllowed": false
     }
   ],
   "users": [
@@ -112,10 +128,23 @@
       "credentials": [
         {
           "type": "password",
-          "value": "ChangeMe_DbScanner_2026!",
+          "value": "${DBSCANNER_INITIAL_ADMIN_PASSWORD}",
           "temporary": true
         }
       ]
+    },
+    {
+      "username": "service-account-dbscanner-admin-service",
+      "enabled": true,
+      "serviceAccountClientId": "dbscanner-admin-service",
+      "clientRoles": {
+        "realm-management": [
+          "query-users",
+          "view-users",
+          "manage-users",
+          "view-realm"
+        ]
+      }
     }
   ]
 }

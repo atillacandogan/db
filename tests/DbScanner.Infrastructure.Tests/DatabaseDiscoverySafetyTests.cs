@@ -469,6 +469,7 @@ public sealed class DatabaseDiscoverySafetyTests
     {
         var values = new Dictionary<string, string?>
         {
+            ["ConnectionStrings:dbscanner"] = "Host=localhost;Database=test;Username=test",
             ["Discovery:ConnectTimeoutMilliseconds"] = "1200",
             ["Discovery:BannerReadTimeoutMilliseconds"] = "250",
             ["Discovery:DnsTimeoutMilliseconds"] = "1800",

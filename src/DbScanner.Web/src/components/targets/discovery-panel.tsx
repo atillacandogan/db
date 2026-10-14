@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/components/providers/auth-provider";
 import { OperationToast } from "@/components/feedback/operation-toast";
@@ -21,6 +21,7 @@ import { ApiError } from "@/lib/api/client";
 import {
   exportDiscoveryAsCsv,
   exportDiscoveryAsJson,
+  exportDiscoveryAsPdf,
   exportDiscoveryAsXlsx,
 } from "@/lib/utils/report-exports";
 import type {
@@ -92,7 +93,7 @@ export function DiscoveryPanel() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [targetValidations, setTargetValidations] = useState<DiscoveryTargetValidationDto[]>([]);
-  const [selectedNetworks, setSelectedNetworks] = useState<string[]>([]);
+  const [networkSelection, setNetworkSelection] = useState<string[] | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [advancedTargetType, setAdvancedTargetType] = useState<AdvancedTargetType>("ipv4");
   const [advancedTargetValue, setAdvancedTargetValue] = useState("");
@@ -102,7 +103,6 @@ export function DiscoveryPanel() {
   const [isBulkTargetInputOpen, setIsBulkTargetInputOpen] = useState(false);
   const [bulkTargetValue, setBulkTargetValue] = useState("");
   const [bulkTargetErrors, setBulkTargetErrors] = useState<BulkTargetError[]>([]);
-  const [networkSelectionInitialized, setNetworkSelectionInitialized] = useState(false);
   const [jobPendingDelete, setJobPendingDelete] = useState<DiscoveryJobDto | null>(null);
   const [deleteNotification, setDeleteNotification] = useState<{
     message: string;
@@ -130,12 +130,11 @@ export function DiscoveryPanel() {
     enabled: isModalOpen && form.scopeMode === "localNetwork",
   });
 
-  useEffect(() => {
-    if (form.scopeMode === "localNetwork" && localNetworksQuery.data && !networkSelectionInitialized) {
-      setSelectedNetworks(localNetworksQuery.data.filter((network) => network.canScan).map((network) => network.cidr));
-      setNetworkSelectionInitialized(true);
-    }
-  }, [form.scopeMode, localNetworksQuery.data, networkSelectionInitialized]);
+  // Defaults come from query data; an explicit selection (including []) is kept.
+  // Deriving them avoids an extra render and setting state inside an effect.
+  const defaultSelectedNetworks = (localNetworksQuery.data ?? [])
+    .filter((network) => network.canScan).map((network) => network.cidr);
+  const selectedNetworks = networkSelection ?? defaultSelectedNetworks;
 
   async function handleCreatedJob(job: DiscoveryJobDto, message: string) {
     setSelectedJobId(job.id);
@@ -703,9 +702,12 @@ export function DiscoveryPanel() {
                         type="checkbox"
                         disabled={!network.canScan}
                         checked={selectedNetworks.includes(network.cidr)}
-                        onChange={() => setSelectedNetworks((current) => current.includes(network.cidr)
-                          ? current.filter((cidr) => cidr !== network.cidr)
-                          : [...current, network.cidr])}
+                        onChange={() => setNetworkSelection((current) => {
+                          const selected = current ?? defaultSelectedNetworks;
+                          return selected.includes(network.cidr)
+                            ? selected.filter((cidr) => cidr !== network.cidr)
+                            : [...selected, network.cidr];
+                        })}
                       />
                       <span>
                         <strong>{network.cidr}</strong>
@@ -984,6 +986,7 @@ function DiscoveryResults({
       <div className="discovery-export-actions">
         <ExportMenu
           options={[
+            { label: "PDF", description: "Yönetici özeti, güven ve doğrulama nedenleri", onSelect: () => void exportDiscoveryAsPdf(job) },
             { label: "Excel (.xlsx)", description: "Özet, supported ve unsupported sonuçlar", onSelect: () => exportDiscoveryAsXlsx(job) },
             { label: "CSV", description: "Tüm discovery sonuçları tek tabloda", onSelect: () => exportDiscoveryAsCsv(job) },
             { label: "JSON", description: "Discovery job ham veri çıktısı", onSelect: () => exportDiscoveryAsJson(job) },

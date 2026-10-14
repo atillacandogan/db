@@ -10,4 +10,5 @@ public sealed record NseScriptSyncResponseMessage(
     int SkippedCount,
     int FailedCount,
     int UninstalledCount,
-    string? Error = null);
+    string? Error = null,
+    string? TenantId = null);

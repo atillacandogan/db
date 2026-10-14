@@ -13,11 +13,11 @@ public sealed class ScanService(
     IScanCredentialProtector credentialProtector) : IScanService
 {
     public Task<Scan> CreateScanAsync(Guid targetId, CancellationToken cancellationToken = default) =>
-        CreateScanAsync(targetId, selectedNseScriptIds: null, cancellationToken);
+        CreateScanAsync(targetId, selectedCheckIds: null, cancellationToken);
 
     public async Task<Scan> CreateScanAsync(
         Guid targetId,
-        IReadOnlyCollection<string>? selectedNseScriptIds,
+        IReadOnlyCollection<string>? selectedCheckIds,
         CancellationToken cancellationToken)
     {
         var target = await targetRepository.GetByIdAsync(targetId, cancellationToken)
@@ -45,7 +45,7 @@ public sealed class ScanService(
             throw new InvalidOperationException("Target already has an active scan.");
         }
 
-        var normalizedScriptIds = NormalizeSelectedScriptIds(selectedNseScriptIds);
+        var normalizedCheckIds = NormalizeSelectedCheckIds(selectedCheckIds);
         var authentication = LoadTargetAuthentication(target);
         ValidateAuthentication(target, authentication);
 
@@ -55,14 +55,17 @@ public sealed class ScanService(
         };
 
         await scanRepository.AddAsync(scan, cancellationToken);
-        await scanRepository.SaveChangesAsync(cancellationToken);
 
         await scanJobPublisher.PublishScanRequestedAsync(
             scan,
             target,
-            normalizedScriptIds,
+            normalizedCheckIds,
             authentication,
             cancellationToken);
+
+        // Publisher stages the outbox row in the same scoped unit of work.
+        // One SaveChanges commits both records; no broker call is made here.
+        await scanRepository.SaveChangesAsync(cancellationToken);
 
         return scan;
     }
@@ -132,25 +135,25 @@ public sealed class ScanService(
         return true;
     }
 
-    private static IReadOnlyCollection<string>? NormalizeSelectedScriptIds(IReadOnlyCollection<string>? selectedNseScriptIds)
+    private static IReadOnlyCollection<string>? NormalizeSelectedCheckIds(IReadOnlyCollection<string>? selectedCheckIds)
     {
-        if (selectedNseScriptIds is null)
+        if (selectedCheckIds is null)
         {
             return null;
         }
 
-        var normalizedScriptIds = selectedNseScriptIds
-            .Where(scriptId => !string.IsNullOrWhiteSpace(scriptId))
-            .Select(scriptId => scriptId.Trim())
+        var normalizedCheckIds = selectedCheckIds
+            .Where(checkId => !string.IsNullOrWhiteSpace(checkId))
+            .Select(checkId => checkId.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        if (normalizedScriptIds.Length == 0)
+        if (normalizedCheckIds.Length == 0)
         {
-            throw new InvalidOperationException("At least one NSE script must be selected.");
+            throw new InvalidOperationException("At least one scan check must be selected.");
         }
 
-        return normalizedScriptIds;
+        return normalizedCheckIds;
     }
 
     private static void ValidateAuthentication(Target target, DatabaseAuthentication? authentication)

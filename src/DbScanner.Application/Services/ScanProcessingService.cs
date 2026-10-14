@@ -1,5 +1,6 @@
 using DbScanner.Application.Models;
 using DbScanner.Application.Ports;
+using DbScanner.Application.Observability;
 using DbScanner.Domain.Entities;
 using DbScanner.Domain.Enums;
 
@@ -14,17 +15,17 @@ public sealed class ScanProcessingService(
     IScoringService scoringService) : IScanProcessingService
 {
     public Task ProcessAsync(Guid scanId, CancellationToken cancellationToken = default) =>
-        ProcessAsync(scanId, selectedNseScriptIds: null, authentication: null, cancellationToken);
+        ProcessAsync(scanId, selectedCheckIds: null, authentication: null, cancellationToken);
 
     public async Task ProcessAsync(
         Guid scanId,
-        IReadOnlyCollection<string>? selectedNseScriptIds,
+        IReadOnlyCollection<string>? selectedCheckIds,
         CancellationToken cancellationToken) =>
-        await ProcessAsync(scanId, selectedNseScriptIds, authentication: null, cancellationToken);
+        await ProcessAsync(scanId, selectedCheckIds, authentication: null, cancellationToken);
 
     public async Task ProcessAsync(
         Guid scanId,
-        IReadOnlyCollection<string>? selectedNseScriptIds,
+        IReadOnlyCollection<string>? selectedCheckIds,
         DatabaseAuthentication? authentication,
         CancellationToken cancellationToken)
     {
@@ -42,7 +43,7 @@ public sealed class ScanProcessingService(
         try
         {
             var rules = await ruleRepository.ListEnabledByEngineAsync(target.Engine, cancellationToken);
-            var scripts = await SelectScriptsAsync(target.Engine, rules, selectedNseScriptIds, cancellationToken);
+            var scripts = await SelectChecksAsync(target.Engine, rules, selectedCheckIds, cancellationToken);
             var executionResult = await scannerRuntime.RunAsync(
                 scan,
                 target,
@@ -58,6 +59,7 @@ public sealed class ScanProcessingService(
                 {
                     ScanId = scan.Id,
                     NseScriptId = result.NseScriptId,
+                    ScanCheckId = result.NseScriptId,
                     ScriptName = result.ScriptName,
                     RawXml = result.RawXml,
                     NormalizedOutput = result.NormalizedOutput,
@@ -65,6 +67,11 @@ public sealed class ScanProcessingService(
                     ResultStatus = result.ResultStatus
                 })
                 .ToArray();
+
+            foreach (var _ in scriptResults)
+            {
+                ScanCompatibilityTelemetry.RecordDualWrite("scan-result");
+            }
 
             await scanRepository.StoreExecutionArtifactsAsync(
                 scan.Id,
@@ -82,6 +89,12 @@ public sealed class ScanProcessingService(
         {
             throw;
         }
+        catch (ScanLeaseLostException)
+        {
+            // The new owner (or cancellation) is authoritative; never mark its job failed.
+            scanRepository.ClearTracking();
+            throw;
+        }
         catch (TimeoutException exception)
         {
             scanRepository.ClearTracking();
@@ -96,55 +109,58 @@ public sealed class ScanProcessingService(
         }
     }
 
-    private async Task<IReadOnlyCollection<NseScript>> SelectScriptsAsync(
+    private async Task<IReadOnlyCollection<NseScript>> SelectChecksAsync(
         DatabaseEngine engine,
         IReadOnlyCollection<Rule> rules,
-        IReadOnlyCollection<string>? selectedNseScriptIds,
+        IReadOnlyCollection<string>? selectedCheckIds,
         CancellationToken cancellationToken)
     {
-        if (selectedNseScriptIds is not null)
+        if (selectedCheckIds is not null)
         {
-            var requestedScriptIds = selectedNseScriptIds
-                .Where(scriptId => !string.IsNullOrWhiteSpace(scriptId))
-                .Select(scriptId => scriptId.Trim())
+            var requestedCheckIds = selectedCheckIds
+                .Where(checkId => !string.IsNullOrWhiteSpace(checkId))
+                .Select(checkId => checkId.Trim())
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-            if (requestedScriptIds.Length == 0)
+            if (requestedCheckIds.Length == 0)
             {
-                throw new InvalidOperationException("At least one NSE script must be selected.");
+                throw new InvalidOperationException("At least one scan check must be selected.");
             }
 
-            var requestedScripts = await nseScriptRepository.ListRunnableByIdsAsync(engine, requestedScriptIds, cancellationToken);
-            var selectedKeys = requestedScripts
+            var requestedChecks = await nseScriptRepository.ListRunnableByIdsAsync(engine, requestedCheckIds, cancellationToken);
+            var selectedKeys = requestedChecks
                 .SelectMany(script => new[] { script.Id, script.NseScriptName })
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var unavailableScriptIds = requestedScriptIds
-                .Where(scriptId => !selectedKeys.Contains(scriptId))
+            var unavailableCheckIds = requestedCheckIds
+                .Where(checkId => !selectedKeys.Contains(checkId))
                 .ToArray();
 
-            if (unavailableScriptIds.Length > 0)
+            if (unavailableCheckIds.Length > 0)
             {
                 throw new InvalidOperationException(
-                    $"Selected NSE scripts are not available for the target engine: {string.Join(", ", unavailableScriptIds)}.");
+                    $"Selected scan checks are not available for the target engine: {string.Join(", ", unavailableCheckIds)}.");
             }
 
-            return requestedScripts;
+            return requestedChecks;
         }
 
-        var approvedScripts = await nseScriptRepository.ListApprovedByEngineAsync(engine, cancellationToken);
+        var approvedChecks = await nseScriptRepository.ListApprovedByEngineAsync(engine, cancellationToken);
 
-        var selectedScriptIds = rules
+        var selectedCheckIdsFromRules = rules
             .SelectMany(rule => rule.RuleScripts)
-            .Select(mapping => mapping.NseScriptId)
+            .Select(mapping => ScanCheckIdCompatibility.Resolve(
+                mapping.ScanCheckId,
+                mapping.NseScriptId,
+                "scan-selection")!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var selectedScripts = approvedScripts
-            .Where(script => script.DefaultEnabled || selectedScriptIds.Contains(script.Id))
-            .GroupBy(script => script.Id, StringComparer.OrdinalIgnoreCase)
+        var selectedChecks = approvedChecks
+            .Where(check => check.DefaultEnabled || selectedCheckIdsFromRules.Contains(check.Id))
+            .GroupBy(check => check.Id, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToArray();
 
-        return selectedScripts;
+        return selectedChecks;
     }
 }

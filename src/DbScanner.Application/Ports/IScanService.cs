@@ -8,7 +8,7 @@ public interface IScanService
 
     Task<Scan> CreateScanAsync(
         Guid targetId,
-        IReadOnlyCollection<string>? selectedNseScriptIds,
+        IReadOnlyCollection<string>? selectedCheckIds,
         CancellationToken cancellationToken);
 
     Task<IReadOnlyList<Scan>> ListScansAsync(CancellationToken cancellationToken = default);

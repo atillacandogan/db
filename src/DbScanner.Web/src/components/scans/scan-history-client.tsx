@@ -8,14 +8,18 @@ import { ExportMenu } from "@/components/ui/export-menu";
 import { OperationToast } from "@/components/feedback/operation-toast";
 import { ScanStatusBadge } from "@/components/feedback/scan-status-badge";
 import { ScanQuickViewModal } from "@/components/scans/scan-quick-view-modal";
-import { cancelScan, deleteScan, getScan, getScans } from "@/lib/api/scans";
+import { cancelScan, deleteScan, getScanForExport, getScans } from "@/lib/api/scans";
 import { queryKeys } from "@/lib/query/query-keys";
 import { resolveRiskLevel, type RiskLevel } from "@/lib/utils/risk";
 import { exportScanAsJson, exportScanAsPdf, exportScanAsXlsx } from "@/lib/utils/report-exports";
+import { useAuth } from "@/components/providers/auth-provider";
 
 export function ScanHistoryClient() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { can } = useAuth();
+  const canOperateScans = can("operateScans");
+  const canDeleteResources = can("deleteResources");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null);
@@ -63,10 +67,7 @@ export function ScanHistoryClient() {
     setError(null);
 
     try {
-      const scan = await queryClient.fetchQuery({
-        queryKey: queryKeys.scan(scanId),
-        queryFn: () => getScan(scanId),
-      });
+      const scan = await getScanForExport(scanId);
 
       if (format === "pdf") {
         await exportScanAsPdf(scan);
@@ -204,7 +205,7 @@ export function ScanHistoryClient() {
                         { label: "JSON", description: "Scan raporunun ham veri çıktısı", onSelect: () => void exportScan(scan.id, "json") },
                       ]}
                     />
-                    {scan.status === "scanning" ? (
+                    {canOperateScans && scan.status === "scanning" ? (
                       <Button
                         className="button button--secondary button--compact"
                         type="button"
@@ -218,7 +219,7 @@ export function ScanHistoryClient() {
                         Durdur
                       </Button>
                     ) : null}
-                    <Button
+                    {canDeleteResources ? <Button
                       className="button button--danger button--compact"
                       type="button"
                       disabled={isActive || cancelScanMutation.isPending || deleteScanMutation.isPending}
@@ -229,7 +230,7 @@ export function ScanHistoryClient() {
                       }}
                     >
                       Sil
-                    </Button>
+                    </Button> : null}
                   </div>
                 </article>
               );

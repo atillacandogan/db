@@ -22,5 +22,6 @@ export type TargetDto = {
   environmentTag?: string;
   hasCredentials: boolean;
   enabled: boolean;
+  permissions?: number;
   lastScan?: TargetScanSummaryDto;
 };

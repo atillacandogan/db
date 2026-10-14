@@ -13,7 +13,7 @@ export type RuleDto = {
   matcherExpression: string;
   remediation: string;
   supportedEngines: Array<"postgresql" | "mysql" | "mssql" | "oracle">;
-  nseScripts: string[];
+  scanChecks: string[];
 };
 
 export type RuleSupportMatrixDto = {

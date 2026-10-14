@@ -1,0 +1,102 @@
+{
+  "title": "DbScanner Scan Compatibility",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "1m",
+  "time": { "from": "now-7d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Ready for legacy removal",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "min by (deployment_environment_name, service_name) (dbscanner_scan_check_compatibility_ready)" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "READY", "color": "green" }, "0": { "text": "BLOCKED", "color": "red" }, "-1": { "text": "NOT AUDITED", "color": "orange" } } }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Legacy fallbacks by surface",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (surface) (increase(dbscanner_scan_check_compatibility_fallbacks_total[15m]))", "legendFormat": "{{surface}}" }
+      ],
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Rejected contract conflicts",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(dbscanner_scan_check_compatibility_conflicts_total[15m]))" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Dual writes",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (surface) (increase(dbscanner_scan_check_compatibility_dual_writes_total[15m]))", "legendFormat": "{{surface}}" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Deployment inventory reporting compatibility readiness",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count by (deployment_environment_name, service_name, service_version, service_instance_id) (dbscanner_scan_check_compatibility_ready)",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 16 }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "7-day fallback increase",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(dbscanner_scan_check_compatibility_fallbacks_total[7d])) or vector(0)" }
+      ],
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 23 }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "7-day conflict increase",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(dbscanner_scan_check_compatibility_conflicts_total[7d])) or vector(0)" }
+      ],
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 23 }
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "7-day minimum readiness",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "min(min_over_time(dbscanner_scan_check_compatibility_ready[7d]))" }
+      ],
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 23 }
+    }
+  ]
+}

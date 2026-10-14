@@ -24,7 +24,10 @@ public sealed class RuleEngine(IScoringService scoringService) : IRuleEngine
         foreach (var rule in rules.Where(rule => rule.Enabled))
         {
             var relatedScriptIds = rule.RuleScripts
-                .Select(mapping => mapping.NseScriptId)
+                .Select(mapping => ScanCheckIdCompatibility.Resolve(
+                    mapping.ScanCheckId,
+                    mapping.NseScriptId,
+                    "rule-evaluation")!)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 

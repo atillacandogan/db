@@ -103,6 +103,10 @@ public sealed class DiscoveryOptionsValidationTests
     private static DiscoveryOptions Resolve(IEnumerable<KeyValuePair<string, string?>> values)
     {
         var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:dbscanner"] = "Host=localhost;Database=test;Username=test"
+            })
             .AddInMemoryCollection(values)
             .Build();
         using var provider = new ServiceCollection()

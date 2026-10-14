@@ -5,6 +5,7 @@ using DbScanner.Domain.Enums;
 
 namespace DbScanner.Infrastructure.Scanning;
 
+// Frozen pre-Strategy chain retained exclusively for old/new parity tests.
 internal sealed class OracleScannerRuntime(
     MsSqlScannerRuntime scannerRuntime,
     IOracleAuthenticatedProbe authenticatedProbe) : IScannerRuntime

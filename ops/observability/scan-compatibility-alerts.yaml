@@ -1,0 +1,47 @@
+groups:
+  - name: dbscanner-scan-compatibility
+    rules:
+      - alert: DbScannerLegacyFallbackDetected
+        expr: increase(dbscanner_scan_check_compatibility_fallbacks_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: DbScanner used a legacy scan-check fallback
+          description: Keep the legacy compatibility layer enabled and inspect the surface label.
+
+      - alert: DbScannerScanCheckContractConflict
+        expr: increase(dbscanner_scan_check_compatibility_conflicts_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Conflicting generic and legacy scan-check identifiers were rejected
+          description: Identify and upgrade the producer before compatibility cleanup.
+
+      - alert: DbScannerLegacyRemovalBlocked
+        expr: dbscanner_scan_check_compatibility_ready != 1
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: DbScanner is not ready to remove legacy scan-check fields
+          description: Query the admin readiness endpoint for missing or mismatched row counts.
+
+      - alert: DbScannerCompatibilityTelemetryMissing
+        expr: absent(dbscanner_scan_check_compatibility_ready)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: DbScanner compatibility telemetry is missing
+          description: Verify the API and worker deployment inventory and their OTLP exporter configuration.
+
+      - alert: DbScannerCompatibilityServiceMissing
+        expr: absent(dbscanner_scan_check_compatibility_ready{service_name="DbScanner.Api"}) or absent(dbscanner_scan_check_compatibility_ready{service_name="DbScanner.ScannerWorker"})
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: An expected DbScanner compatibility service has no reporting instance
+          description: Compare the deployment inventory with the environment rollout manifest before starting or continuing the window.

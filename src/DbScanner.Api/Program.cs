@@ -5,11 +5,15 @@ using DbScanner.Api.Security;
 using DbScanner.Application.Exceptions;
 using DbScanner.Application.Models;
 using DbScanner.Application.Ports;
+using DbScanner.Contracts.ScanChecks;
 using DbScanner.Domain.Enums;
 using DbScanner.Infrastructure;
+using DbScanner.Infrastructure.Observability;
 using DbScanner.Infrastructure.Persistence;
+using DbScanner.Infrastructure.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 var allowedOrigins = builder.Configuration
@@ -19,6 +23,7 @@ var allowedOrigins = builder.Configuration
 
 builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks();
+builder.Services.AddDbScannerTelemetry(builder.Configuration, "DbScanner.Api");
 var authenticationAuthority = builder.Configuration["Authentication:Authority"]
     ?? throw new InvalidOperationException("Authentication:Authority is required.");
 var authenticationAudience = builder.Configuration["Authentication:Audience"]
@@ -67,7 +72,12 @@ builder.Services
 
 var app = builder.Build();
 
-await app.Services.ApplyDbScannerMigrationsAsync();
+await app.Services.VerifyDbScannerTenantBeforeMigrationAsync();
+if (builder.Configuration.GetValue("Persistence:ApplyMigrations", true))
+{
+    await app.Services.ApplyDbScannerMigrationsAsync();
+}
+await app.Services.VerifyDbScannerTenantAsync();
 
 if (app.Environment.IsDevelopment())
 {
@@ -77,11 +87,19 @@ if (app.Environment.IsDevelopment())
 app.UseCors("WebClient");
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseMiddleware<ResourceAccessMiddleware>();
+app.MapResourceAccess();
 app.MapHealthChecks("/health");
 
 app.MapGet("/api/status", () => Results.Ok(new
 {
     service = "DbScanner.Api",
+    version = builder.Configuration["Telemetry:DeploymentVersion"]
+        ?? typeof(Program).Assembly.GetName().Version?.ToString()
+        ?? "unknown",
+    instance = Environment.MachineName,
+    environment = builder.Configuration["Telemetry:Environment"]
+        ?? app.Environment.EnvironmentName,
     status = "ready"
 }))
 .WithName("GetApiStatus");
@@ -143,7 +161,8 @@ app.MapPost("/api/rules", async (
                 request.MatcherExpression,
                 request.Remediation,
                 request.SupportedEngines,
-                request.NseScripts),
+                request.NseScripts,
+                request.ScanChecks),
             cancellationToken);
 
         return Results.Created($"/api/rules/{rule.Id}", rule);
@@ -181,7 +200,8 @@ app.MapPut("/api/rules/{id}", async (
                 request.MatcherExpression,
                 request.Remediation,
                 request.SupportedEngines,
-                request.NseScripts),
+                request.NseScripts,
+                request.ScanChecks),
             cancellationToken);
 
         return Results.Ok(rule);
@@ -340,6 +360,156 @@ app.MapDelete("/api/nse-scripts/{id}", async (
 .ProducesProblem(StatusCodes.Status404NotFound)
 .ProducesProblem(StatusCodes.Status500InternalServerError)
 .WithName("DeleteNseScript")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapGet("/api/scan-checks", async (
+    IScanCheckCatalogService scanCheckCatalogService,
+    CancellationToken cancellationToken) =>
+{
+    var checks = await scanCheckCatalogService.ListAsync(cancellationToken);
+    return Results.Ok(checks);
+})
+.Produces(StatusCodes.Status200OK)
+.ProducesProblem(StatusCodes.Status500InternalServerError)
+.WithName("GetScanChecks")
+.RequireAuthorization(AuthorizationPolicies.Viewer);
+
+app.MapGet("/api/scan-checks/compatibility-readiness", async (
+    IScanCompatibilityReadinessService readinessService,
+    CancellationToken cancellationToken) =>
+{
+    var readiness = await readinessService.GetAsync(cancellationToken);
+    return Results.Ok(readiness);
+})
+.Produces<ScanCompatibilityReadiness>(StatusCodes.Status200OK)
+.ProducesProblem(StatusCodes.Status500InternalServerError)
+.WithName("GetScanCheckCompatibilityReadiness")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapGet("/api/scan-checks/executors", (IScanExecutorStrategyResolver resolver) =>
+    Results.Ok(resolver.RegisteredCapabilities.Select(capability =>
+        new ScanExecutorCapabilityDto(
+            capability.ExecutorType,
+            capability.DisplayName,
+            capability.Description,
+            capability.SupportedEngines
+                .Select(engine => engine.ToApiString())
+                .OrderBy(engine => engine, StringComparer.Ordinal)
+                .ToArray(),
+            capability.AllowsManualCheckCreation,
+            capability.AllowsCheckNameEditing,
+            capability.SupportsConfigurationSchema))))
+.Produces<IReadOnlyList<ScanExecutorCapabilityDto>>(StatusCodes.Status200OK)
+.WithName("GetScanExecutorCapabilities")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPost("/api/scan-checks", async (
+    CreateScanCheckRequest request,
+    IScanCheckCatalogService scanCheckCatalogService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var check = await scanCheckCatalogService.CreateAsync(
+            new CreateScanCheckCommand(
+                request.Id,
+                request.Name,
+                request.DisplayName,
+                request.Description,
+                request.ExecutorType,
+                request.SupportedEngines,
+                request.Categories,
+                request.DefaultEnabled,
+                request.RequiresCredentials,
+                request.IsIntrusive,
+                request.ConfigurationSchema,
+                request.ParserType,
+                request.MatcherType,
+                request.MatcherExpression,
+                request.Severity,
+                request.Weight,
+                request.RemediationTemplate,
+                request.DocumentationUrl,
+                request.ApprovalStatus),
+            cancellationToken);
+
+        return Results.Created($"/api/scan-checks/{check.Id}", check);
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message });
+    }
+})
+.Produces(StatusCodes.Status201Created)
+.ProducesProblem(StatusCodes.Status400BadRequest)
+.ProducesProblem(StatusCodes.Status500InternalServerError)
+.WithName("CreateScanCheck")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPut("/api/scan-checks/{id}", async (
+    string id,
+    UpdateScanCheckRequest request,
+    IScanCheckCatalogService scanCheckCatalogService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var check = await scanCheckCatalogService.UpdateAsync(
+            id,
+            new UpdateScanCheckCommand(
+                request.Name,
+                request.DisplayName,
+                request.Description,
+                request.ExecutorType,
+                request.SupportedEngines,
+                request.Categories,
+                request.DefaultEnabled,
+                request.RequiresCredentials,
+                request.IsIntrusive,
+                request.ConfigurationSchema,
+                request.ParserType,
+                request.MatcherType,
+                request.MatcherExpression,
+                request.Severity,
+                request.Weight,
+                request.RemediationTemplate,
+                request.DocumentationUrl,
+                request.ApprovalStatus),
+            cancellationToken);
+
+        return Results.Ok(check);
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message });
+    }
+})
+.Produces(StatusCodes.Status200OK)
+.ProducesProblem(StatusCodes.Status400BadRequest)
+.ProducesProblem(StatusCodes.Status500InternalServerError)
+.WithName("UpdateScanCheck")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapDelete("/api/scan-checks/{id}", async (
+    string id,
+    IScanCheckCatalogService scanCheckCatalogService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var deleted = await scanCheckCatalogService.DeleteAsync(id, cancellationToken);
+        return deleted ? Results.NoContent() : Results.NotFound();
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message });
+    }
+})
+.Produces(StatusCodes.Status204NoContent)
+.ProducesProblem(StatusCodes.Status400BadRequest)
+.ProducesProblem(StatusCodes.Status404NotFound)
+.ProducesProblem(StatusCodes.Status500InternalServerError)
+.WithName("DeleteScanCheck")
 .RequireAuthorization(AuthorizationPolicies.Admin);
 
 app.MapGet("/api/targets", async (
@@ -735,17 +905,240 @@ app.MapPost("/api/discoveries/{id:guid}/allowlist", async (
 .WithName("ApproveDiscoveryAllowlist")
 .RequireAuthorization(AuthorizationPolicies.Admin);
 
-app.MapPost("/api/scans", async (
-    CreateScanRequest request,
-    IScanService scanService,
+app.MapGet("/api/admin/users", async (
+    string? search,
+    string? role,
+    bool? enabled,
+    int? page,
+    int? pageSize,
+    IAdminUserService adminUserService,
     CancellationToken cancellationToken) =>
 {
     try
     {
+        var result = await adminUserService.ListAsync(
+            search,
+            role,
+            enabled,
+            page ?? 1,
+            pageSize ?? 20,
+            cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (Exception exception) when (IsAdminUserException(exception))
+    {
+        return MapAdminUserException(exception);
+    }
+})
+.WithName("ListAdminUsers")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPost("/api/admin/users", async (
+    CreateAdminUserRequest request,
+    HttpContext httpContext,
+    IAdminUserService adminUserService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var result = await adminUserService.CreateAsync(
+            new CreateAdminUserCommand(
+                request.Username,
+                request.FirstName,
+                request.LastName,
+                request.Email,
+                request.Role,
+                request.RequireMfa,
+                request.TemporaryPassword),
+            GetAdminUserActor(httpContext.User),
+            cancellationToken);
+        return Results.Created($"/api/admin/users/{result.User.Id}", result);
+    }
+    catch (Exception exception) when (IsAdminUserException(exception))
+    {
+        return MapAdminUserException(exception);
+    }
+})
+.WithName("CreateAdminUser")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapGet("/api/admin/users/{id}", async (
+    string id,
+    IAdminUserService adminUserService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var user = await adminUserService.GetAsync(id, cancellationToken);
+        return user is null ? Results.NotFound() : Results.Ok(user);
+    }
+    catch (Exception exception) when (IsAdminUserException(exception))
+    {
+        return MapAdminUserException(exception);
+    }
+})
+.WithName("GetAdminUser")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPut("/api/admin/users/{id}", async (
+    string id,
+    UpdateAdminUserRequest request,
+    HttpContext httpContext,
+    IAdminUserService adminUserService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var user = await adminUserService.UpdateAsync(
+            id,
+            new UpdateAdminUserCommand(request.FirstName, request.LastName, request.Email),
+            GetAdminUserActor(httpContext.User),
+            cancellationToken);
+        return Results.Ok(user);
+    }
+    catch (Exception exception) when (IsAdminUserException(exception))
+    {
+        return MapAdminUserException(exception);
+    }
+})
+.WithName("UpdateAdminUser")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPut("/api/admin/users/{id}/roles", async (
+    string id,
+    UpdateAdminUserRoleRequest request,
+    HttpContext httpContext,
+    IAdminUserService adminUserService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var user = await adminUserService.ChangeRoleAsync(
+            id,
+            request.Role,
+            GetAdminUserActor(httpContext.User),
+            cancellationToken);
+        return Results.Ok(user);
+    }
+    catch (Exception exception) when (IsAdminUserException(exception))
+    {
+        return MapAdminUserException(exception);
+    }
+})
+.WithName("UpdateAdminUserRole")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPatch("/api/admin/users/{id}/status", async (
+    string id,
+    UpdateAdminUserStatusRequest request,
+    HttpContext httpContext,
+    IAdminUserService adminUserService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var user = await adminUserService.ChangeStatusAsync(
+            id,
+            request.Enabled,
+            GetAdminUserActor(httpContext.User),
+            cancellationToken);
+        return Results.Ok(user);
+    }
+    catch (Exception exception) when (IsAdminUserException(exception))
+    {
+        return MapAdminUserException(exception);
+    }
+})
+.WithName("UpdateAdminUserStatus")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPut("/api/admin/users/{id}/mfa", async (
+    string id,
+    UpdateAdminUserMfaRequest request,
+    HttpContext httpContext,
+    IAdminUserService adminUserService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var user = await adminUserService.ChangeMfaRequirementAsync(
+            id,
+            request.Required,
+            GetAdminUserActor(httpContext.User),
+            cancellationToken);
+        return Results.Ok(user);
+    }
+    catch (Exception exception) when (IsAdminUserException(exception))
+    {
+        return MapAdminUserException(exception);
+    }
+})
+.WithName("UpdateAdminUserMfa")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPost("/api/admin/users/{id}/reset-password", async (
+    string id,
+    HttpContext httpContext,
+    IAdminUserService adminUserService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        await adminUserService.RequestPasswordResetAsync(
+            id,
+            GetAdminUserActor(httpContext.User),
+            cancellationToken);
+        return Results.NoContent();
+    }
+    catch (Exception exception) when (IsAdminUserException(exception))
+    {
+        return MapAdminUserException(exception);
+    }
+})
+.WithName("ResetAdminUserPassword")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPost("/api/admin/users/{id}/logout", async (
+    string id,
+    HttpContext httpContext,
+    IAdminUserService adminUserService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        await adminUserService.LogoutAsync(
+            id,
+            GetAdminUserActor(httpContext.User),
+            cancellationToken);
+        return Results.NoContent();
+    }
+    catch (Exception exception) when (IsAdminUserException(exception))
+    {
+        return MapAdminUserException(exception);
+    }
+})
+.WithName("LogoutAdminUserSessions")
+.RequireAuthorization(AuthorizationPolicies.Admin);
+
+app.MapPost("/api/scans", async (
+    CreateScanRequest request,
+    IScanService scanService,
+    DbScannerDbContext database,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        var visible = await database.Targets.FromSqlInterpolated($"SELECT * FROM targets WHERE \"Id\" = {request.TargetId} FOR UPDATE")
+            .AnyAsync(cancellationToken);
+        if (!visible) return Results.NotFound();
         var scan = await scanService.CreateScanAsync(
             request.TargetId,
-            request.SelectedNseScriptIds,
+            ScanCheckSelectionCompatibility.Resolve(
+                request.SelectedCheckIds,
+                request.SelectedNseScriptIds),
             cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return Results.Accepted($"/api/scans/{scan.Id}", scan.ToDto());
     }
     catch (InvalidOperationException exception)
@@ -787,6 +1180,12 @@ app.MapGet("/api/scans/{id:guid}", async (
 })
 .WithName("GetScan")
 .RequireAuthorization(AuthorizationPolicies.Viewer);
+
+app.MapGet("/api/scans/{id:guid}/export", async (Guid id, IScanService scanService, CancellationToken cancellationToken) =>
+{
+    var scan = await scanService.GetScanAsync(id, cancellationToken);
+    return scan is null ? Results.NotFound() : Results.Ok(scan.ToDto());
+}).WithName("ExportScan").RequireAuthorization(AuthorizationPolicies.Viewer);
 
 app.MapPost("/api/scans/{id:guid}/cancel", async (
     Guid id,
@@ -886,4 +1285,51 @@ static DatabaseAuthentication? MapCredentials(DatabaseCredentialRequest? credent
             credentials.TrustServerCertificate,
             credentials.ConnectionTimeoutSeconds);
 
+static AdminUserActor GetAdminUserActor(System.Security.Claims.ClaimsPrincipal principal) =>
+    new(
+        principal.FindFirst("sub")?.Value
+            ?? throw new InvalidOperationException("Authenticated user subject is required."),
+        principal.FindFirst("preferred_username")?.Value ?? principal.Identity?.Name,
+        principal.FindFirst("email")?.Value);
+
+static bool IsAdminUserException(Exception exception) => exception is
+    InvalidOperationException
+    or IdentityManagementUnavailableException
+    or IdentityEmailDeliveryException;
+
+static IResult MapAdminUserException(Exception exception) => exception switch
+{
+    IdentityManagementUnavailableException => Results.Json(
+        new
+        {
+            code = "IDENTITY_SERVICE_UNAVAILABLE",
+            message = "Kimlik yönetimi servisine şu anda ulaşılamıyor."
+        },
+        statusCode: StatusCodes.Status503ServiceUnavailable),
+    IdentityEmailDeliveryException => Results.Json(
+        new
+        {
+            code = "IDENTITY_EMAIL_UNAVAILABLE",
+            message = "Kimlik yönetimi e-posta servisine şu anda ulaşılamıyor."
+        },
+        statusCode: StatusCodes.Status503ServiceUnavailable),
+    IdentityUserNotFoundException => Results.Json(
+        new { code = "IDENTITY_USER_NOT_FOUND", message = "Kullanıcı bulunamadı." },
+        statusCode: StatusCodes.Status404NotFound),
+    IdentityManagementConflictException conflict => Results.Json(
+        new { code = "IDENTITY_USER_CONFLICT", message = conflict.Message },
+        statusCode: StatusCodes.Status409Conflict),
+    AdminUserOperationNotAllowedException blocked => Results.Json(
+        new { code = "ADMIN_USER_OPERATION_BLOCKED", message = blocked.Message },
+        statusCode: StatusCodes.Status409Conflict),
+    InvalidOperationException validation => Results.Json(
+        new { code = "ADMIN_USER_VALIDATION_FAILED", message = validation.Message },
+        statusCode: StatusCodes.Status400BadRequest),
+    _ => Results.Json(
+        new { code = "ADMIN_USER_OPERATION_FAILED", message = "Kullanıcı yönetimi işlemi tamamlanamadı." },
+        statusCode: StatusCodes.Status500InternalServerError)
+};
+
 app.Run();
+
+public partial class Program;

@@ -1,0 +1,42 @@
+namespace DbScanner.Api.Contracts;
+
+public sealed record CreateScanCheckRequest(
+    string Id,
+    string Name,
+    string DisplayName,
+    string Description,
+    string ExecutorType,
+    IReadOnlyList<string> SupportedEngines,
+    string? Categories,
+    bool DefaultEnabled,
+    bool RequiresCredentials,
+    bool IsIntrusive,
+    string? ConfigurationSchema,
+    string ParserType,
+    string MatcherType,
+    string MatcherExpression,
+    string Severity,
+    int Weight,
+    string? RemediationTemplate,
+    string? DocumentationUrl,
+    string ApprovalStatus);
+
+public sealed record UpdateScanCheckRequest(
+    string Name,
+    string DisplayName,
+    string Description,
+    string ExecutorType,
+    IReadOnlyList<string> SupportedEngines,
+    string? Categories,
+    bool DefaultEnabled,
+    bool RequiresCredentials,
+    bool IsIntrusive,
+    string? ConfigurationSchema,
+    string ParserType,
+    string MatcherType,
+    string MatcherExpression,
+    string Severity,
+    int Weight,
+    string? RemediationTemplate,
+    string? DocumentationUrl,
+    string ApprovalStatus);

@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ScanStatusBadge } from "@/components/feedback/scan-status-badge";
 import { OperationToast } from "@/components/feedback/operation-toast";
 import { ExportMenu } from "@/components/ui/export-menu";
-import { getScan } from "@/lib/api/scans";
+import { getScan, getScanForExport } from "@/lib/api/scans";
 import { exportScanAsJson, exportScanAsPdf, exportScanAsXlsx } from "@/lib/utils/report-exports";
 import { resolveRiskLevel, type RiskLevel } from "@/lib/utils/risk";
 import { getScriptResultStatus } from "@/lib/utils/script-result";
@@ -61,17 +61,20 @@ export default function ScanDetailPage() {
       : scan.findings.filter((finding) => finding.severity === selectedSeverity);
   const duration = formatDuration(scan.startedAt, scan.finishedAt);
 
-  async function exportPdf() {
+  async function exportFile(format: "pdf" | "xlsx" | "json") {
     if (!scan) {
       return;
     }
 
     setExportError(null);
     try {
-      await exportScanAsPdf(scan);
+      const authorized = await getScanForExport(scan.id);
+      if (format === "pdf") await exportScanAsPdf(authorized);
+      else if (format === "xlsx") exportScanAsXlsx(authorized);
+      else exportScanAsJson(authorized);
     } catch (error) {
       console.error("Scan PDF export failed.", error);
-      setExportError("PDF hazırlanamadı. Lütfen tekrar deneyin.");
+      setExportError("Rapor dışa aktarılamadı. Hedefin dışa aktarma yetkisini kontrol edin.");
     }
   }
 
@@ -89,9 +92,9 @@ export default function ScanDetailPage() {
           <span className="no-print">
             <ExportMenu
               options={[
-                { label: "PDF", description: "Gerçek PDF dosyası olarak indir", onSelect: () => void exportPdf() },
-                { label: "Excel (.xlsx)", description: "Özet, findings ve script sonuçları", onSelect: () => exportScanAsXlsx(scan) },
-                { label: "JSON", description: "Scan raporunun ham veri çıktısı", onSelect: () => exportScanAsJson(scan) },
+                { label: "PDF", description: "Gerçek PDF dosyası olarak indir", onSelect: () => void exportFile("pdf") },
+                { label: "Excel (.xlsx)", description: "Özet, findings ve script sonuçları", onSelect: () => void exportFile("xlsx") },
+                { label: "JSON", description: "Scan raporunun ham veri çıktısı", onSelect: () => void exportFile("json") },
               ]}
             />
           </span>
@@ -119,15 +122,15 @@ export default function ScanDetailPage() {
       <section className="placeholder report-section">
         <div className="section-heading">
           <div>
-            <p className="detail-label">Executed NSE Scripts</p>
-            <p className="muted">{scan.scriptResults.length} script sonucu kaydedildi.</p>
+            <p className="detail-label">Executed Scan Checks</p>
+            <p className="muted">{scan.scriptResults.length} scan check sonucu kaydedildi.</p>
           </div>
         </div>
 
         {scan.scriptResults.length > 0 ? (
           <div className="report-table script-result-table">
             <div className="report-table__header">
-              <span>Script Name</span>
+              <span>Scan Check</span>
               <span>Status</span>
               <span>Exit Code</span>
               <span>Summary</span>
@@ -138,7 +141,7 @@ export default function ScanDetailPage() {
             ))}
           </div>
         ) : (
-          <p className="muted">Bu scan icin henuz script sonucu yok.</p>
+          <p className="muted">Bu scan icin henuz scan check sonucu yok.</p>
         )}
       </section>
 
@@ -211,10 +214,10 @@ function ScriptResultRow({ result }: { result: ScanScriptResultDto }) {
 
   return (
     <article className="report-table__row">
-      <div className="report-table__cell report-table__cell--primary" data-label="Script Name">
+      <div className="report-table__cell report-table__cell--primary" data-label="Scan Check">
         <div className="report-table__main">
           <strong>{result.scriptName}</strong>
-          {result.nseScriptId ? <p className="muted">{result.nseScriptId}</p> : null}
+          {result.scanCheckId ? <p className="muted">{result.scanCheckId}</p> : null}
         </div>
       </div>
 

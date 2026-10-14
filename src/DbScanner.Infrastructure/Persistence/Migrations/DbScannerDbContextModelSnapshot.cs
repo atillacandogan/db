@@ -22,6 +22,119 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("DbScanner.Domain.Entities.AccessGrant", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Permissions")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("TargetId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("TeamId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId");
+
+                    b.HasIndex("TargetId", "ProjectId");
+
+                    b.HasIndex("TeamId", "ProjectId", "TargetId")
+                        .IsUnique();
+
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("TeamId", "ProjectId", "TargetId"), false);
+
+                    b.ToTable("access_grants", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_access_grants_permissions", "\"Permissions\" BETWEEN 1 AND 15");
+                        });
+                });
+
+            modelBuilder.Entity("DbScanner.Domain.Entities.AccessProject", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("access_projects", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("00000000-0000-0000-0000-000000000001"),
+                            Name = "Varsayılan proje"
+                        });
+                });
+
+            modelBuilder.Entity("DbScanner.Domain.Entities.AccessTeam", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsArchived")
+                        .IsConcurrencyToken()
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("access_teams", (string)null);
+                });
+
+            modelBuilder.Entity("DbScanner.Domain.Entities.AccessTeamMember", b =>
+                {
+                    b.Property<Guid>("TeamId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Subject")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("TeamId", "Subject");
+
+                    b.HasIndex("Subject");
+
+                    b.ToTable("access_team_members", (string)null);
+                });
+
+            modelBuilder.Entity("DbScanner.Domain.Entities.DeploymentTenant", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("deployment_tenant", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_deployment_tenant_singleton", "\"Id\" = 1");
+                        });
+                });
+
             modelBuilder.Entity("DbScanner.Domain.Entities.DiscoveredDatabase", b =>
                 {
                     b.Property<Guid>("Id")
@@ -244,6 +357,10 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");
 
+                    b.Property<string>("ExecutorType")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<bool?>("IsInstalled")
                         .HasColumnType("boolean");
 
@@ -310,6 +427,7 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                             DefaultEnabled = true,
                             Description = "Generic service banner collection.",
                             DisplayName = "Banner",
+                            ExecutorType = "nmap-nse",
                             IsIntrusive = false,
                             MatcherType = "Contains",
                             NseScriptName = "banner",
@@ -328,6 +446,7 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                             DefaultEnabled = true,
                             Description = "Collects safe unauthenticated MySQL service metadata where available.",
                             DisplayName = "MySQL Info",
+                            ExecutorType = "nmap-nse",
                             IsIntrusive = false,
                             MatcherType = "Contains",
                             NseScriptName = "mysql-info",
@@ -420,6 +539,57 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                             ParserType = "GenericOutput",
                             RuleId = "mysql_service_detected"
                         });
+                });
+
+            modelBuilder.Entity("DbScanner.Domain.Entities.ResourceAccessAudit", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("ActorSubject")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("ActorUsername")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("AfterJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("BeforeJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("EntityId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("EntityType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<Guid?>("TeamId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("Timestamp")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TeamId", "Timestamp");
+
+                    b.HasIndex("Timestamp", "Id");
+
+                    b.ToTable("resource_access_audits", (string)null);
                 });
 
             modelBuilder.Entity("DbScanner.Domain.Entities.Rule", b =>
@@ -619,9 +789,15 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 
+                    b.Property<string>("ScanCheckId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
                     b.HasKey("RuleId", "NseScriptId");
 
                     b.HasIndex("NseScriptId");
+
+                    b.HasIndex("ScanCheckId");
 
                     b.ToTable("rule_nse_scripts", (string)null);
 
@@ -629,22 +805,26 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                         new
                         {
                             RuleId = "generic_db_port_open",
-                            NseScriptId = "banner"
+                            NseScriptId = "banner",
+                            ScanCheckId = "banner"
                         },
                         new
                         {
                             RuleId = "generic_service_fingerprint_detected",
-                            NseScriptId = "banner"
+                            NseScriptId = "banner",
+                            ScanCheckId = "banner"
                         },
                         new
                         {
                             RuleId = "pg_service_detected",
-                            NseScriptId = "banner"
+                            NseScriptId = "banner",
+                            ScanCheckId = "banner"
                         },
                         new
                         {
                             RuleId = "mysql_service_detected",
-                            NseScriptId = "mysql-info"
+                            NseScriptId = "mysql-info",
+                            ScanCheckId = "mysql-info"
                         });
                 });
 
@@ -661,8 +841,20 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)");
 
+                    b.Property<int>("ExecutionAttempt")
+                        .HasColumnType("integer");
+
                     b.Property<DateTimeOffset?>("FinishedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastHeartbeatAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("OverallSeverity")
                         .HasMaxLength(32)
@@ -690,9 +882,59 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Status", "LeaseExpiresAt");
+
                     b.HasIndex("TargetId", "Status");
 
                     b.ToTable("scans", (string)null);
+                });
+
+            modelBuilder.Entity("DbScanner.Domain.Entities.ScanOutboxMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("AvailableAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("DeadLetter")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("DeliveryAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("DispatchExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DispatchToken")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("LastErrorCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("PublishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ScanId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ScanId")
+                        .IsUnique();
+
+                    b.HasIndex("PublishedAt", "AvailableAt");
+
+                    b.ToTable("scan_outbox_messages", (string)null);
                 });
 
             modelBuilder.Entity("DbScanner.Domain.Entities.ScanScopeAllowlist", b =>
@@ -813,6 +1055,10 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<string>("ScanCheckId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
                     b.Property<Guid>("ScanId")
                         .HasColumnType("uuid");
 
@@ -824,6 +1070,8 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("NseScriptId");
+
+                    b.HasIndex("ScanCheckId");
 
                     b.HasIndex("ScanId");
 
@@ -874,11 +1122,18 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                     b.Property<int>("Port")
                         .HasColumnType("integer");
 
+                    b.Property<Guid>("ProjectId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasDefaultValue(new Guid("00000000-0000-0000-0000-000000000001"));
+
                     b.Property<string>("ProtectedCredentials")
                         .HasMaxLength(4096)
                         .HasColumnType("character varying(4096)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ProjectId");
 
                     b.HasIndex("NormalizedHost", "Port", "Engine")
                         .IsUnique();
@@ -897,7 +1152,8 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                             Host = "demo-postgres-target",
                             Name = "Demo PostgreSQL",
                             NormalizedHost = "demo-postgres-target",
-                            Port = 5432
+                            Port = 5432,
+                            ProjectId = new Guid("00000000-0000-0000-0000-000000000001")
                         },
                         new
                         {
@@ -910,8 +1166,100 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                             Host = "demo-mysql-target",
                             Name = "Demo MySQL",
                             NormalizedHost = "demo-mysql-target",
-                            Port = 3306
+                            Port = 3306,
+                            ProjectId = new Guid("00000000-0000-0000-0000-000000000001")
                         });
+                });
+
+            modelBuilder.Entity("DbScanner.Domain.Entities.UserManagementAudit", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("ActorEmail")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)");
+
+                    b.Property<string>("ActorSubject")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("ActorUsername")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<bool?>("NewEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NewRole")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<bool?>("PreviousEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("PreviousRole")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<bool>("Succeeded")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("TargetUserId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<DateTimeOffset>("Timestamp")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Timestamp");
+
+                    b.HasIndex("TargetUserId", "Timestamp");
+
+                    b.ToTable("user_management_audits", (string)null);
+                });
+
+            modelBuilder.Entity("DbScanner.Domain.Entities.AccessGrant", b =>
+                {
+                    b.HasOne("DbScanner.Domain.Entities.AccessProject", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("DbScanner.Domain.Entities.AccessTeam", null)
+                        .WithMany()
+                        .HasForeignKey("TeamId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("DbScanner.Domain.Entities.Target", null)
+                        .WithMany()
+                        .HasForeignKey("TargetId", "ProjectId")
+                        .HasPrincipalKey("Id", "ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade);
+                });
+
+            modelBuilder.Entity("DbScanner.Domain.Entities.AccessTeamMember", b =>
+                {
+                    b.HasOne("DbScanner.Domain.Entities.AccessTeam", null)
+                        .WithMany()
+                        .HasForeignKey("TeamId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("DbScanner.Domain.Entities.DiscoveredDatabase", b =>
@@ -1016,6 +1364,15 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                     b.Navigation("Target");
                 });
 
+            modelBuilder.Entity("DbScanner.Domain.Entities.ScanOutboxMessage", b =>
+                {
+                    b.HasOne("DbScanner.Domain.Entities.Scan", null)
+                        .WithOne()
+                        .HasForeignKey("DbScanner.Domain.Entities.ScanOutboxMessage", "ScanId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("DbScanner.Domain.Entities.ScanScriptResult", b =>
                 {
                     b.HasOne("DbScanner.Domain.Entities.NseScript", "NseScript")
@@ -1032,6 +1389,15 @@ namespace DbScanner.Infrastructure.Persistence.Migrations
                     b.Navigation("NseScript");
 
                     b.Navigation("Scan");
+                });
+
+            modelBuilder.Entity("DbScanner.Domain.Entities.Target", b =>
+                {
+                    b.HasOne("DbScanner.Domain.Entities.AccessProject", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("DbScanner.Domain.Entities.DiscoveryJob", b =>

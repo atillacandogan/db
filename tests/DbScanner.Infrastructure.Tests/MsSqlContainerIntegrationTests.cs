@@ -15,6 +15,7 @@ using Xunit;
 
 namespace DbScanner.Infrastructure.Tests;
 
+[Collection(DatabaseContainerTestCollection.Name)]
 public sealed class MsSqlContainerIntegrationTests
 {
     private const string Image =
@@ -108,14 +109,21 @@ public sealed class MsSqlContainerIntegrationTests
             TrustServerCertificate: true,
             ConnectionTimeoutSeconds: 10);
 
-        var baselineResults = await probe.RunAsync(
-            target,
-            [
-                CreateScript(MsSqlProbeScripts.Version),
-                CreateScript(MsSqlProbeScripts.CurrentLoginSysadmin),
-                CreateScript(MsSqlProbeScripts.XpCmdShell)
-            ],
-            scannerAuthentication);
+        var baselineChecks = new[]
+        {
+            CreateScript(MsSqlProbeScripts.Version),
+            CreateScript(MsSqlProbeScripts.CurrentLoginSysadmin),
+            CreateScript(MsSqlProbeScripts.XpCmdShell)
+        };
+        var baselineResults = await probe.RunAsync(target, baselineChecks, scannerAuthentication);
+        var strategy = new MsSqlNativeScanExecutorStrategy(probe, new PassingBrowserProbe());
+        var strategyResult = await strategy.ExecuteAsync(
+            new ScanExecutionContext(new Scan { TargetId = target.Id, Target = target },
+                target, scannerAuthentication),
+            baselineChecks.Select(script => script.ToScanCheckDefinition(ScanExecutorTypes.MsSqlNative)).ToArray());
+        Assert.Equal(
+            baselineResults.Select(result => (result.ScriptName, result.NormalizedOutput, result.ResultStatus, (int?)result.ExitCode)),
+            strategyResult.CheckResults.Select(result => (result.CheckName, result.NormalizedOutput, result.ResultStatus, result.ExitCode)));
 
         var versionResult = ResultFor(baselineResults, MsSqlProbeScripts.Version);
         Assert.True(

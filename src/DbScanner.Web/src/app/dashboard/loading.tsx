@@ -1,9 +1,9 @@
 export default function DashboardLoading() {
   return (
-    <section className="page-stack page-stack--wide dashboard-page" aria-busy="true" aria-label="Dashboard yukleniyor">
+    <section className="page-stack page-stack--wide dashboard-page" lang="tr" aria-busy="true" aria-label="Dashboard yükleniyor">
       <header className="rules-hero dashboard-hero">
         <div>
-          <p className="eyebrow">Overview</p>
+          <p className="eyebrow">Genel bakış</p>
           <h1>Db Scanner</h1>
         </div>
         <span className="dashboard-skeleton dashboard-skeleton--hero" />

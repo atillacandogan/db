@@ -215,7 +215,76 @@ public sealed class ScanWorkflowTests
         Assert.Equal(1, storedScan.RiskScore);
         Assert.Equal(Severity.Low, storedScan.OverallSeverity);
         Assert.Single(storedScan.ScriptResults);
+        Assert.Equal("banner", storedScan.ScriptResults.Single().ScanCheckId);
         Assert.Single(storedScan.Findings);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_DualReadsLegacyAndGenericRuleMappingsAndDualWritesResults()
+    {
+        var target = CreatePostgreSqlTarget();
+        var scan = new Scan
+        {
+            Id = Guid.NewGuid(),
+            TargetId = target.Id,
+            Target = target,
+            Status = ScanStatus.Scanning
+        };
+        var legacyScript = new NseScript
+        {
+            Id = "legacy-check",
+            NseScriptName = "legacy-check",
+            DisplayName = "Legacy check",
+            Description = "Legacy catalog row.",
+            SupportedEngines = "PostgreSql",
+            ApprovalStatus = ScriptApprovalStatus.Approved
+        };
+        var genericScript = new NseScript
+        {
+            Id = "generic-check",
+            ExecutorType = ScanExecutorTypes.NmapNse,
+            NseScriptName = "generic-check",
+            DisplayName = "Generic check",
+            Description = "Generic catalog row.",
+            SupportedEngines = "PostgreSql",
+            ApprovalStatus = ScriptApprovalStatus.Approved
+        };
+        var legacyRule = CreateSelectionRule("legacy-rule");
+        legacyRule.RuleScripts.Add(new RuleNseScript
+        {
+            RuleId = legacyRule.Id,
+            NseScriptId = legacyScript.Id
+        });
+        var genericRule = CreateSelectionRule("generic-rule");
+        genericRule.RuleScripts.Add(new RuleNseScript
+        {
+            RuleId = genericRule.Id,
+            NseScriptId = genericScript.Id,
+            ScanCheckId = genericScript.Id
+        });
+        var runtime = new RecordingScannerRuntime(new ScanExecutionResult(
+            "<nmaprun />",
+            "ok",
+            [
+                new ScanScriptExecutionResult(legacyScript.Id, legacyScript.NseScriptName, null, "ok", 0),
+                new ScanScriptExecutionResult(genericScript.Id, genericScript.NseScriptName, null, "ok", 0)
+            ]));
+        var repository = new InMemoryScanRepository(scan);
+        var service = new ScanProcessingService(
+            repository,
+            new StubNseScriptRepository(legacyScript, genericScript),
+            new StubRuleRepository(legacyRule, genericRule),
+            runtime,
+            new StubRuleEngine([]),
+            new ScoringService());
+
+        await service.ProcessAsync(scan.Id);
+
+        Assert.Equal(
+            ["generic-check", "legacy-check"],
+            runtime.Scripts.Select(script => script.Id).OrderBy(id => id));
+        Assert.Equal(2, scan.ScriptResults.Count);
+        Assert.All(scan.ScriptResults, result => Assert.Equal(result.NseScriptId, result.ScanCheckId));
     }
 
     [Fact]
@@ -454,6 +523,127 @@ public sealed class ScanWorkflowTests
     }
 
     [Fact]
+    public async Task CreateScanAsync_NormalizesAndDeduplicatesSelectedScriptIdsBeforePublishing()
+    {
+        var target = new Target
+        {
+            Id = Guid.NewGuid(),
+            Name = "Demo PostgreSQL",
+            Host = "demo-postgres-target",
+            Port = 5432,
+            Engine = DatabaseEngine.PostgreSql
+        };
+        var publisher = new StubScanJobPublisher();
+        var service = new ScanService(
+            new StubTargetRepository(target),
+            new InMemoryScanRepository(),
+            new StubScanScopeRepository(true),
+            publisher,
+            new StubCredentialProtector());
+
+        await service.CreateScanAsync(
+            target.Id,
+            [" banner ", "BANNER", "mysql-info"],
+            CancellationToken.None);
+
+        Assert.Equal(["banner", "mysql-info"], publisher.PublishedScriptIds);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_DoesNotInvokeRuntimeForCancelledScan()
+    {
+        var target = CreatePostgreSqlTarget();
+        var scan = new Scan
+        {
+            Id = Guid.NewGuid(),
+            TargetId = target.Id,
+            Target = target,
+            Status = ScanStatus.Cancelled
+        };
+        var runtime = new CountingScannerRuntime();
+        var service = new ScanProcessingService(
+            new InMemoryScanRepository(scan),
+            new StubNseScriptRepository(),
+            new StubRuleRepository(),
+            runtime,
+            new StubRuleEngine([]),
+            new ScoringService());
+
+        await service.ProcessAsync(scan.Id);
+
+        Assert.Equal(0, runtime.InvocationCount);
+        Assert.Equal(ScanStatus.Cancelled, scan.Status);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_MarksScanFailedWhenRuntimeThrowsUnexpectedException()
+    {
+        var target = CreatePostgreSqlTarget();
+        var scan = new Scan
+        {
+            Id = Guid.NewGuid(),
+            TargetId = target.Id,
+            Target = target,
+            Status = ScanStatus.Scanning
+        };
+        var service = new ScanProcessingService(
+            new InMemoryScanRepository(scan),
+            new StubNseScriptRepository(),
+            new StubRuleRepository(),
+            new ThrowingScannerRuntime(new InvalidOperationException("runtime failed")),
+            new StubRuleEngine([]),
+            new ScoringService());
+
+        await service.ProcessAsync(scan.Id);
+
+        Assert.Equal(ScanStatus.Failed, scan.Status);
+        Assert.Equal("runtime failed", scan.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_PropagatesRequestedCancellationWithoutChangingScanStatus()
+    {
+        var target = CreatePostgreSqlTarget();
+        var scan = new Scan
+        {
+            Id = Guid.NewGuid(),
+            TargetId = target.Id,
+            Target = target,
+            Status = ScanStatus.Scanning
+        };
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var service = new ScanProcessingService(
+            new InMemoryScanRepository(scan),
+            new StubNseScriptRepository(),
+            new StubRuleRepository(),
+            new ThrowingScannerRuntime(new OperationCanceledException(cancellation.Token)),
+            new StubRuleEngine([]),
+            new ScoringService());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.ProcessAsync(scan.Id, cancellation.Token));
+
+        Assert.Equal(ScanStatus.Scanning, scan.Status);
+        Assert.Null(scan.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_PropagatesLostLeaseWithoutChangingAnotherOwnersStatus()
+    {
+        var target = CreatePostgreSqlTarget();
+        var scan = new Scan { TargetId = target.Id, Target = target, Status = ScanStatus.Scanning };
+        var service = new ScanProcessingService(new InMemoryScanRepository(scan),
+            new StubNseScriptRepository(), new StubRuleRepository(),
+            new ThrowingScannerRuntime(new ScanLeaseLostException(scan.Id)),
+            new StubRuleEngine([]), new ScoringService());
+
+        await Assert.ThrowsAsync<ScanLeaseLostException>(() => service.ProcessAsync(scan.Id));
+        Assert.Equal(ScanStatus.Scanning, scan.Status);
+        Assert.Null(scan.ErrorMessage);
+    }
+
+    [Fact]
     public async Task TryMarkScanningAsync_ReturnsFalseWhenScanIsAlreadyScanning()
     {
         var scan = new Scan
@@ -502,6 +692,26 @@ public sealed class ScanWorkflowTests
         Assert.True(deleted);
         Assert.Empty(repository.Scans);
     }
+
+    private static Target CreatePostgreSqlTarget() => new()
+    {
+        Id = Guid.NewGuid(),
+        Name = "Demo PostgreSQL",
+        Host = "demo-postgres-target",
+        Port = 5432,
+        Engine = DatabaseEngine.PostgreSql
+    };
+
+    private static Rule CreateSelectionRule(string id) => new()
+    {
+        Id = id,
+        Title = id,
+        Description = id,
+        Engine = DatabaseEngine.PostgreSql,
+        Enabled = true,
+        MatcherExpression = "ok",
+        Remediation = "none"
+    };
 
     private sealed class StubTargetRepository(params Target[] targets) : ITargetRepository
     {
@@ -765,6 +975,22 @@ public sealed class ScanWorkflowTests
             Task.FromResult(result);
     }
 
+    private sealed class RecordingScannerRuntime(ScanExecutionResult result) : IScannerRuntime
+    {
+        public IReadOnlyCollection<NseScript> Scripts { get; private set; } = [];
+
+        public Task<ScanExecutionResult> RunAsync(
+            Scan scan,
+            Target target,
+            IReadOnlyCollection<NseScript> scripts,
+            DatabaseAuthentication? authentication = null,
+            CancellationToken cancellationToken = default)
+        {
+            Scripts = scripts;
+            return Task.FromResult(result);
+        }
+    }
+
     private sealed class ThrowingScannerRuntime(Exception exception) : IScannerRuntime
     {
         public Task<ScanExecutionResult> RunAsync(
@@ -774,6 +1000,22 @@ public sealed class ScanWorkflowTests
             DatabaseAuthentication? authentication = null,
             CancellationToken cancellationToken = default) =>
             Task.FromException<ScanExecutionResult>(exception);
+    }
+
+    private sealed class CountingScannerRuntime : IScannerRuntime
+    {
+        public int InvocationCount { get; private set; }
+
+        public Task<ScanExecutionResult> RunAsync(
+            Scan scan,
+            Target target,
+            IReadOnlyCollection<NseScript> scripts,
+            DatabaseAuthentication? authentication = null,
+            CancellationToken cancellationToken = default)
+        {
+            InvocationCount++;
+            return Task.FromResult(new ScanExecutionResult(string.Empty, string.Empty, []));
+        }
     }
 
     private sealed class StubRuleEngine(IReadOnlyList<Finding> findings) : IRuleEngine

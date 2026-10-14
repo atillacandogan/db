@@ -5,6 +5,11 @@ namespace DbScanner.Domain.Entities;
 public sealed class NseScript
 {
     public required string Id { get; set; }
+    /// <summary>
+    /// Executor-neutral strategy identifier. Null means the row predates the
+    /// generic catalog and must use the legacy server-side routing rules.
+    /// </summary>
+    public string? ExecutorType { get; set; }
     public required string NseScriptName { get; set; }
     public required string DisplayName { get; set; }
     public required string Description { get; set; }

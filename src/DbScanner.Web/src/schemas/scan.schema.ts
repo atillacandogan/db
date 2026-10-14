@@ -4,7 +4,7 @@ export type ScanStatus = "pending" | "scanning" | "scanned" | "failed" | "timeou
 
 export type ScanScriptResultDto = {
   id: string;
-  nseScriptId?: string;
+  scanCheckId?: string;
   scriptName: string;
   rawXml?: string;
   normalizedOutput?: string;

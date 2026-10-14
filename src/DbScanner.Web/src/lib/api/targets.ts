@@ -34,8 +34,12 @@ export type UpdateTargetRequest = {
   clearCredentials?: boolean;
 };
 
-export function getTargets(): Promise<TargetDto[]> {
-  return apiGet<TargetDto[]>(endpoints.targets);
+export async function getTargets(): Promise<TargetDto[]> {
+  const [targets, access] = await Promise.all([
+    apiGet<TargetDto[]>(endpoints.targets),
+    apiGet<{ targetId: string; permissions: number }[]>("/api/access/targets"),
+  ]);
+  return targets.map(target => ({ ...target, permissions: access.find(item => item.targetId === target.id)?.permissions ?? 0 }));
 }
 
 export function createTarget(request: CreateTargetRequest): Promise<TargetDto> {

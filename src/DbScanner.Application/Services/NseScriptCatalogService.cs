@@ -45,6 +45,8 @@ public sealed class NseScriptCatalogService(INseScriptRepository nseScriptReposi
             Source = NseScriptSource.Manual
         };
 
+        script.ExecutorType = LegacyScanCheckExecutorRouting.Resolve(script);
+
         script.Matchers.Add(new NseScriptMatcher
         {
             NseScriptId = script.Id,

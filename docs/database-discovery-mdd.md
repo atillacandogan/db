@@ -291,6 +291,7 @@ Probe beklenen engine'de durmaz; kalan üç database protokolünü yeni TCP bağ
 Arbitrary open portlara protocol auto-detection yapılmaz. Database ancak port endpoint planına ilgili engine ile atanmışsa probe edilir:
 
 - Mevcut config sayesinde MySQL `13306`, PostgreSQL `15432`, MSSQL `11433`, Oracle `11521` desteklenir.
+- Aspire demo ortamındaki `demo-mysql-on-postgres-port-target`, MySQL 8.4'ü container içinde `5432` portunda çalıştırır (host endpoint `15433`). `5432` PostgreSQL port planında zaten bulunduğu için ayrı config gerekmez; bu hedef cross-port fingerprint davranışını gerçek servisle test eder.
 - Yeni custom port `Discovery:LocalNetworkPorts:<engine>` config'ine eklenirse Local/Advanced'de; allowlist `AllowedPorts` içine eklenirse legacy authorized modda planlanabilir.
 - UI kullanıcıya port girme alanı sunmaz.
 - PostgreSQL'in örneğin `6000` portunda çalışması mevcut config ile bulunamaz. Port herhangi bir tarama listesine eklendiğinde bağımsız SSLRequest probe'u PostgreSQL'i doğrulayabilir.

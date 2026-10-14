@@ -7,3 +7,15 @@
 .agents/
 *.user
 *.suo
+.tmp-staj/
+deliverables/
+tmp/
+output/
+**/.env
+**/.env.*
+**/secrets.json
+**/*.key
+**/*.pem
+**/*.dump
+**/*.backup
+ops/observability/*.local.json

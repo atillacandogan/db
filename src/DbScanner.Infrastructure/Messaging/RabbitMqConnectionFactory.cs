@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using RabbitMQ.Client;
+using DbScanner.Infrastructure.Identity;
 
 namespace DbScanner.Infrastructure.Messaging;
 
@@ -10,12 +11,19 @@ internal sealed class RabbitMqConnectionFactory(IConfiguration configuration)
         var connectionString = configuration.GetConnectionString("rabbitmq");
         if (!string.IsNullOrWhiteSpace(connectionString))
         {
-            return new ConnectionFactory
+            var factory = new ConnectionFactory
             {
                 Uri = new Uri(connectionString)
             };
+            var tenant = configuration.GetSection(TenantIsolationOptions.SectionName).Get<TenantIsolationOptions>() ?? new();
+            if (tenant.DedicatedTenant && (factory.VirtualHost != $"tenant.{tenant.TenantId}"
+                || factory.UserName == "guest"))
+                throw new InvalidOperationException("Dedicated tenant requires its own RabbitMQ vhost tenant.<TenantId> and non-guest login with permissions restricted to that vhost.");
+            return factory;
         }
 
+        if (configuration.GetValue<bool>("TenantIsolation:DedicatedTenant"))
+            throw new InvalidOperationException("Dedicated tenant requires an explicit RabbitMQ connection string with a tenant vhost.");
         return new ConnectionFactory
         {
             HostName = configuration["RABBITMQ_HOST"] ?? "localhost",

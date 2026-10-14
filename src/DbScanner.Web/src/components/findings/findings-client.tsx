@@ -10,7 +10,7 @@ import { ExportMenu } from "@/components/ui/export-menu";
 import { getFindings, getFindingsForExport } from "@/lib/api/findings";
 import { queryKeys } from "@/lib/query/query-keys";
 import { resolveRiskLevel, type RiskLevel } from "@/lib/utils/risk";
-import { exportFindingsAsCsv, exportFindingsAsXlsx } from "@/lib/utils/report-exports";
+import { exportFindingsAsCsv, exportFindingsAsPdf, exportFindingsAsXlsx } from "@/lib/utils/report-exports";
 import { getSeverityLabel } from "@/lib/utils/severity";
 import type { FindingListItemDto } from "@/schemas/finding.schema";
 
@@ -46,7 +46,7 @@ export function FindingsClient() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedFinding]);
 
-  async function exportAllFindings(format: "xlsx" | "csv") {
+  async function exportAllFindings(format: "pdf" | "xlsx" | "csv") {
     if (isExporting) {
       return;
     }
@@ -56,7 +56,9 @@ export function FindingsClient() {
 
     try {
       const allFindings = await getFindingsForExport();
-      if (format === "xlsx") {
+      if (format === "pdf") {
+        await exportFindingsAsPdf(allFindings);
+      } else if (format === "xlsx") {
         exportFindingsAsXlsx(allFindings);
       } else {
         exportFindingsAsCsv(allFindings);
@@ -83,6 +85,7 @@ export function FindingsClient() {
               <ExportMenu
                 label={isExporting ? "Hazırlanıyor..." : undefined}
                 options={[
+                  { label: "PDF", description: "Yönetici risk özeti, evidence ve remediation", onSelect: () => void exportAllFindings("pdf") },
                   { label: "Excel (.xlsx)", description: "Tüm bulguların detaylı çıktısı", onSelect: () => void exportAllFindings("xlsx") },
                   { label: "CSV", description: "Tüm bulguların tablo çıktısı", onSelect: () => void exportAllFindings("csv") },
                 ]}

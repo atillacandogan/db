@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DbScanner.Application.Ports;
 using DbScanner.Contracts.Discovery;
+using DbScanner.Infrastructure.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -13,6 +14,7 @@ internal sealed class RabbitMqDiscoveryJobConsumer(
     RabbitMqConnectionFactory connectionFactory,
     IServiceScopeFactory serviceScopeFactory,
     IOptions<RabbitMqOptions> options,
+    IOptions<TenantIsolationOptions> tenantOptions,
     ILogger<RabbitMqDiscoveryJobConsumer> logger) : IDiscoveryJobConsumer
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -52,6 +54,11 @@ internal sealed class RabbitMqDiscoveryJobConsumer(
         {
             var message = JsonSerializer.Deserialize<DiscoveryRequestedMessage>(args.Body.Span, JsonOptions)
                 ?? throw new InvalidOperationException("Discovery message could not be deserialized.");
+            if (!tenantOptions.Value.AcceptsMessage(message.TenantId))
+            {
+                await channel.BasicRejectAsync(args.DeliveryTag, requeue: false, cancellationToken);
+                return;
+            }
             using var scope = serviceScopeFactory.CreateScope();
             var agent = scope.ServiceProvider.GetRequiredService<IDiscoveryAgent>();
             await agent.ExecuteAsync(message.DiscoveryJobId, cancellationToken);

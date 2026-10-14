@@ -5,6 +5,7 @@ namespace DbScanner.Domain.Entities;
 public sealed class Target
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ProjectId { get; set; } = AccessProject.DefaultId;
     public required string Name { get; set; }
     public required string Host { get; set; }
     public string NormalizedHost { get; set; } = string.Empty;

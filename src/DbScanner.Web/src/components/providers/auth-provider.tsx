@@ -6,18 +6,32 @@ import {
   initializeKeycloak,
   logoutFromKeycloak,
 } from "@/lib/auth/keycloak";
+import {
+  hasAnyRole,
+  hasPermission,
+  type DbScannerPermission,
+} from "@/lib/auth/authorization";
 
 type AuthContextValue = {
+  userId: string;
   username: string;
+  email?: string;
   roles: string[];
   hasRole: (role: string) => boolean;
+  hasAnyRole: (...roles: string[]) => boolean;
+  can: (permission: DbScannerPermission) => boolean;
   logout: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [identity, setIdentity] = useState<{ username: string; roles: string[] } | null>(null);
+  const [identity, setIdentity] = useState<{
+    userId: string;
+    username: string;
+    email?: string;
+    roles: string[];
+  } | null>(null);
   const [error, setError] = useState("");
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
@@ -60,13 +74,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return {
       ...identity,
       hasRole: (role) => identity.roles.includes(role),
+      hasAnyRole: (...roles) => hasAnyRole(identity.roles, roles),
+      can: (permission) => hasPermission(identity.roles, permission),
       logout,
     };
   }, [identity, logout]);
 
   if (isLoggingOut) {
     return (
-      <main className="auth-state" aria-live="polite">
+      <main className="auth-state" aria-live="polite" lang="tr">
         <strong>Güvenli çıkış yapılıyor...</strong>
         <p>Keycloak oturumunuz kapatılıyor.</p>
       </main>
@@ -75,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   if (error) {
     return (
-      <main className="auth-state" role="alert">
+      <main className="auth-state" role="alert" lang="tr">
         <strong>Oturum açılamadı.</strong>
         <p>{error}</p>
         <button className="button" type="button" onClick={() => window.location.reload()}>
@@ -87,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   if (!value) {
     return (
-      <main className="auth-state" aria-live="polite">
+      <main className="auth-state" aria-live="polite" lang="tr">
         <strong>Güvenli oturum hazırlanıyor...</strong>
         <p>Keycloak giriş ekranına yönlendiriliyorsunuz.</p>
       </main>

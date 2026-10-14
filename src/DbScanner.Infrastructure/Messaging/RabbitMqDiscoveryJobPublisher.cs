@@ -3,6 +3,7 @@ using System.Text.Json;
 using DbScanner.Application.Ports;
 using DbScanner.Contracts.Discovery;
 using DbScanner.Domain.Entities;
+using DbScanner.Infrastructure.Identity;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 
@@ -10,13 +11,14 @@ namespace DbScanner.Infrastructure.Messaging;
 
 internal sealed class RabbitMqDiscoveryJobPublisher(
     RabbitMqConnectionFactory connectionFactory,
-    IOptions<RabbitMqOptions> options) : IDiscoveryJobPublisher
+    IOptions<RabbitMqOptions> options,
+    IOptions<TenantIsolationOptions> tenantOptions) : IDiscoveryJobPublisher
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public async Task PublishRequestedAsync(DiscoveryJob job, CancellationToken cancellationToken = default)
     {
-        var message = new DiscoveryRequestedMessage(job.Id, DateTimeOffset.UtcNow);
+        var message = new DiscoveryRequestedMessage(job.Id, DateTimeOffset.UtcNow, tenantOptions.Value.TenantId);
         var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message, JsonOptions));
 
         await using var connection = await connectionFactory.Create().CreateConnectionAsync(cancellationToken);

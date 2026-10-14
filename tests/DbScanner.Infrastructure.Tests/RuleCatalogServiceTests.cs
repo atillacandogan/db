@@ -18,7 +18,7 @@ public sealed class RuleCatalogServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
-        await using var dbContext = new DbScannerDbContext(options);
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
         await dbContext.Database.EnsureCreatedAsync();
 
         var rule = await dbContext.Rules
@@ -44,7 +44,7 @@ public sealed class RuleCatalogServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
-        await using var dbContext = new DbScannerDbContext(options);
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
         await dbContext.Database.EnsureCreatedAsync();
 
         var repository = new RuleRepository(dbContext);
@@ -77,7 +77,8 @@ public sealed class RuleCatalogServiceTests
 
         Assert.Equal("DB port open updated", updatedRule.Title);
         Assert.Equal(["mysql", "postgresql"], updatedRule.SupportedEngines);
-        Assert.Equal(["banner"], updatedRule.NseScripts);
+        Assert.Equal(["banner"], updatedRule.ScanChecks);
+        Assert.Equal(["banner"], updatedRule.ScanChecks);
 
         dbContext.ChangeTracker.Clear();
         var persistedRule = await repository.GetByIdAsync("generic_db_port_open")
@@ -90,6 +91,9 @@ public sealed class RuleCatalogServiceTests
         Assert.Equal(
             originalScriptMappings.Select(mapping => mapping.NseScriptId),
             persistedRule.RuleScripts.Select(mapping => mapping.NseScriptId));
+        Assert.All(
+            persistedRule.RuleScripts,
+            mapping => Assert.Equal(mapping.NseScriptId, mapping.ScanCheckId));
     }
 
     [Fact]
@@ -99,7 +103,7 @@ public sealed class RuleCatalogServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
-        await using var dbContext = new DbScannerDbContext(options);
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
         await dbContext.Database.EnsureCreatedAsync();
 
         var repository = new RuleRepository(dbContext);
@@ -122,7 +126,8 @@ public sealed class RuleCatalogServiceTests
                 ["mysql-info"]));
 
         Assert.Equal(["postgresql"], updatedRule.SupportedEngines);
-        Assert.Equal(["mysql-info"], updatedRule.NseScripts);
+        Assert.Equal(["mysql-info"], updatedRule.ScanChecks);
+        Assert.Equal(["mysql-info"], updatedRule.ScanChecks);
     }
 
     [Fact]
@@ -132,7 +137,7 @@ public sealed class RuleCatalogServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
-        await using var dbContext = new DbScannerDbContext(options);
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
         await dbContext.Database.EnsureCreatedAsync();
 
         var service = new RuleCatalogService(new RuleRepository(dbContext));
@@ -154,6 +159,46 @@ public sealed class RuleCatalogServiceTests
 
         Assert.Equal("mssql", rule.Engine);
         Assert.Equal(["mssql"], rule.SupportedEngines);
-        Assert.Equal(["banner"], rule.NseScripts);
+        Assert.Equal(["banner"], rule.ScanChecks);
+        Assert.Equal(["banner"], rule.ScanChecks);
+    }
+
+    [Fact]
+    public async Task UpdateRuleAsync_AcceptsGenericOnlyCheckMappingAndDualWritesLegacyColumn()
+    {
+        var options = new DbContextOptionsBuilder<DbScannerDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+        await using var dbContext = new DbScannerDbContext(options, DbScanner.Application.Models.ResourceAccessContext.ForSystem());
+        await dbContext.Database.EnsureCreatedAsync();
+        var repository = new RuleRepository(dbContext);
+        var service = new RuleCatalogService(repository);
+
+        var updated = await service.UpdateRuleAsync(
+            "generic_db_port_open",
+            new UpdateRuleCommand(
+                "DB port open",
+                "Database service port is reachable.",
+                "generic",
+                "info",
+                0,
+                true,
+                "structured_xml",
+                "contains",
+                "open",
+                "Confirm expected exposure.",
+                ["postgresql"],
+                NseScripts: null,
+                ScanChecks: ["mysql-info"]));
+
+        Assert.Equal(["mysql-info"], updated.ScanChecks);
+        Assert.Equal(["mysql-info"], updated.ScanChecks);
+
+        dbContext.ChangeTracker.Clear();
+        var persisted = await repository.GetByIdAsync("generic_db_port_open")
+            ?? throw new InvalidOperationException("Updated rule was not found.");
+        var mapping = Assert.Single(persisted.RuleScripts);
+        Assert.Equal("mysql-info", mapping.NseScriptId);
+        Assert.Equal("mysql-info", mapping.ScanCheckId);
     }
 }
