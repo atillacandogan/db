@@ -11,6 +11,30 @@ namespace DbScanner.Infrastructure.Tests;
 public sealed class NmapScannerRuntimeTests
 {
     [Fact]
+    public async Task RunAsync_PropagatesMissingExecutableByDefault()
+    {
+        var runtime = new NmapScannerRuntime(
+            Options.Create(new ScannerOptions
+            {
+                ExecutablePath = "nmap-does-not-exist",
+                TimeoutSeconds = 1
+            }),
+            new StubMySqlEmptyPasswordProbe(),
+            NullLogger<NmapScannerRuntime>.Instance);
+        var target = new Target
+        {
+            Name = "Unavailable scanner",
+            Host = "127.0.0.1",
+            Port = 5432,
+            Engine = DatabaseEngine.PostgreSql
+        };
+        var scan = new Scan { TargetId = target.Id, Target = target };
+
+        await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(
+            () => runtime.RunAsync(scan, target, [CreateScript("banner", "postgresql")]));
+    }
+
+    [Fact]
     public async Task RunAsync_UsesSampleOutputWhenExecutableIsUnavailable()
     {
         var runtime = new NmapScannerRuntime(

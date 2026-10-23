@@ -14,6 +14,8 @@
 /deliverables/
 /tmp/
 /output/
+# Local presentation generator with machine-specific fonts and dependencies.
+/scripts/generate-presentation.js
 /ops/observability/*.local.json
 
 # Local secrets and database backups (public certificates are not private keys).

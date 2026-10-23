@@ -6,5 +6,5 @@ public sealed class ScannerOptions
 
     public string ExecutablePath { get; set; } = "nmap";
     public int TimeoutSeconds { get; set; } = 30;
-    public bool UseSampleOutputWhenUnavailable { get; set; } = true;
+    public bool UseSampleOutputWhenUnavailable { get; set; } = false;
 }

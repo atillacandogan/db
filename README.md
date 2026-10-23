@@ -145,5 +145,5 @@ dotenv dosyaları, private key'ler ve veritabanı yedekleri Git ve Docker build
 kapsamı dışında tutulur. Kaynak kod/migration/test dosyalarını birlikte commit edin;
 yalnız mevcut commit'leri push etmek çalışma dizinindeki yenilikleri göndermez.
 
-Güvenlik değişiklikleri, kalan geliştirme bağımlılığı uyarısı ve yayın öncesi
-kontrol listesi: [GitHub hazırlık raporu](docs/architecture/github-readiness.md).
+Güncel güvenlik yamaları, doğrulama sonuçları ve üretim sınırları:
+[24 Ekim 2026 GitHub hazırlık raporu](docs/architecture/github-readiness-2026-10-24.md).

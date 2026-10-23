@@ -11,6 +11,7 @@
 deliverables/
 tmp/
 output/
+scripts/generate-presentation.js
 **/.env
 **/.env.*
 **/secrets.json

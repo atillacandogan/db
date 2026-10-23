@@ -1,5 +1,8 @@
 # GitHub yayın hazırlığı — 2026-10-07
 
+Güncel kontrol ve güvenlik yamaları için [24 Ekim 2026 yayın kontrolüne](github-readiness-2026-10-24.md) bakın.
+Bu belgedeki paket sürümleri ve audit sonuçları tarihsel kayıttır.
+
 Bu değişiklik repository'yi yayına hazırlar; commit/push, canlı realm/parola
 rotasyonu, veritabanı temizliği veya Git geçmişi rewrite yapılmaz.
 
